@@ -6,9 +6,17 @@ from aiogram.types import (
     ReplyKeyboardMarkup, KeyboardButton
 )
 from aiogram.utils import executor
-from aiogram.contrib.fsm_storage.memory import MemoryStorage
 from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters.state import State, StatesGroup
+from aiogram.contrib.fsm_storage.memory import MemoryStorage
+
+from config import BOT_TOKEN, VIDEO_PRESENTATION_FILE_ID, VIDEO_REVIEWS
+from payment_config import SUBSCRIPTION_PRICE, CLOSED_GROUP_LINK
+from database import (
+    create_tables, get_db, get_user_by_telegram_id, create_user, 
+    update_user_onboarding, create_subscription, get_active_subscription
+)
+from payment_service import StripeService, PayPalService
 
 # 1. Загрузка .env и инициализация
 load_dotenv()
@@ -17,17 +25,8 @@ bot     = Bot(token=BOT_TOKEN, parse_mode="HTML")
 storage = MemoryStorage()
 dp      = Dispatcher(bot, storage=storage)
 
-# --- ВИДЕО FILE_ID (ЗАМЕНИТЕ НА РЕАЛЬНЫЕ ПОСЛЕ ЗАГРУЗКИ ВИДЕО) ---
-# Для тестирования используем None, чтобы отправлять текстовые заглушки
-VIDEO_PRESENTATION_FILE_ID = None  # Замените на реальный file_id
-VIDEO_REVIEWS = {
-    "review_1": None,  # Замените на реальные file_id после загрузки видео
-    "review_2": None,
-    "review_3": None,
-    "review_4": None,
-    "review_5": None
-}
-# ---------------------------------------------------
+# Создаем таблицы при запуске
+create_tables()
 
 # 2. Описание состояний онбординга
 class Onboarding(StatesGroup):
@@ -50,8 +49,8 @@ def create_inline_keyboard(buttons, prefix, row_width=2):
 # 4. Функция для создания постоянной Reply клавиатуры
 def get_main_reply_keyboard():
     kb = ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=False)
-    kb.add(KeyboardButton("🔄 Ricomincia da capo"))  # 🔄 Начать заново
-    kb.add(KeyboardButton("⭐ Recensioni"), KeyboardButton("📞 Consulenza"))  # ⭐ Отзывы, 📞 Консультация
+    kb.add(KeyboardButton("🔄 Ricomincia da capo"), KeyboardButton("💳 Il mio abbonamento"))  # 🔄 Начать заново , Новая кнопка: Моя подписка
+    kb.add(KeyboardButton("⭐ Recensioni"), KeyboardButton("📞 Consulenza"))  # ⭐ Отзывы, 📞 Консультация  # Новая кнопка: Моя подписка
     return kb
 
 # 5. Функция для безопасной отправки видео
@@ -67,10 +66,33 @@ async def send_video_or_placeholder(message, file_id, caption, placeholder_text)
         # Отправляем заглушку если file_id не задан
         await message.answer(f"🎬 {placeholder_text}\n\n<i>Il video non è temporaneamente disponibile</i>")  # 🎬 {placeholder_text}\n\n<i>Видео временно недоступно</i>
 
-# 6. Старт онбординга
+# 6. Функция для работы с базой данных
+
+def get_or_create_user(telegram_id: int, username: str = None, first_name: str = None, last_name: str = None):
+    
+    # Получение или создание пользователя
+    db = next(get_db())
+    try:
+        user = get_user_by_telegram_id(db, telegram_id)
+        if not user:
+            user = create_user(db, telegram_id, username, first_name, last_name)
+        return user
+    finally:
+        db.close()
+        
+# 7. Старт онбординга
 @dp.message_handler(commands=["start"], state="*")
 async def cmd_start(msg: types.Message, state: FSMContext):
     await state.finish() # Сбрасываем состояние при старте
+     
+     # Создаем или получаем пользователя в БД
+    user = get_or_create_user(
+        telegram_id=msg.from_user.id,
+        username=msg.from_user.username,
+        first_name=msg.from_user.first_name,
+        last_name=msg.from_user.last_name
+    )
+    
     await Onboarding.format.set()
      
      # Устанавливаем Reply-кнопки отдельным сообщением с текстом
@@ -91,7 +113,7 @@ async def cmd_start(msg: types.Message, state: FSMContext):
     reply_markup=format_kb
 )
    
-# 7. Обработка формата
+# 8. Обработка формата
 @dp.callback_query_handler(lambda c: c.data.startswith("format:"), state=Onboarding.format)
 async def process_format(c: types.CallbackQuery, state: FSMContext):
     chosen_format = c.data.split(":", 1)[1]
@@ -111,7 +133,7 @@ async def process_format(c: types.CallbackQuery, state: FSMContext):
     )
     await c.answer()
 
-# 8. Уровень
+# 9. Уровень
 @dp.callback_query_handler(lambda c: c.data.startswith("level:"), state=Onboarding.level)
 async def process_level(c: types.CallbackQuery, state: FSMContext):
     chosen_level = c.data.split(":", 1)[1]
@@ -129,8 +151,9 @@ async def process_level(c: types.CallbackQuery, state: FSMContext):
     "Perfetto! Quanto tempo alla settimana sei disposto/a a dedicare allo studio?",  # Отлично! Сколько времени в неделю ты готов(а) уделять обучению?
     reply_markup=time_kb
     )
-
-# 9. Время
+    await c.answer()
+    
+# 10. Время
 @dp.callback_query_handler(lambda c: c.data.startswith("time:"), state=Onboarding.time)
 async def process_time(c: types.CallbackQuery, state: FSMContext):
     chosen_time = c.data.split(":", 1)[1]
@@ -150,7 +173,7 @@ async def process_time(c: types.CallbackQuery, state: FSMContext):
     )
     await c.answer()
 
-# 10. Цель
+# 11. Цель
 @dp.callback_query_handler(lambda c: c.data.startswith("goal:"), state=Onboarding.goal)
 async def process_goal(c: types.CallbackQuery, state: FSMContext):
     chosen_goal = c.data.split(":", 1)[1]
@@ -171,7 +194,7 @@ async def process_goal(c: types.CallbackQuery, state: FSMContext):
      )
     await c.answer()
 
-# 11. Промо выбор (пробный урок/биография/отзывы)
+# 12. Промо выбор (пробный урок/биография/отзывы)
 @dp.callback_query_handler(lambda c: c.data.startswith("promo:"), state=Onboarding.promo_choice)
 async def process_promo_choice(c: types.CallbackQuery, state: FSMContext):
     chosen_promo = c.data.split(":", 1)[1]
@@ -233,13 +256,27 @@ async def process_promo_choice(c: types.CallbackQuery, state: FSMContext):
     )
     await c.answer()
 
-# 12. Финальный выбор
+# 13. Финальный выбор
 @dp.callback_query_handler(lambda c: c.data.startswith("final:"), state=Onboarding.final_choice)
 async def process_final_choice(c: types.CallbackQuery, state: FSMContext):
     chosen_final = c.data.split(":", 1)[1]
     
     # Получаем все данные пользователя
     user_data = await state.get_data()
+    
+     # Сохраняем данные онбординга в БД
+    db = next(get_db())
+    try:
+        update_user_onboarding(
+            db, 
+            c.from_user.id,
+            user_data.get('format'),
+            user_data.get('level'),
+            user_data.get('time'),
+            user_data.get('goal')
+        )
+    finally:
+        db.close()
     
     if chosen_final == "join":
         # Предлагаем выбор способа оплаты
@@ -249,11 +286,13 @@ async def process_final_choice(c: types.CallbackQuery, state: FSMContext):
         ], prefix="payment_method", row_width=1)
         
         await c.message.answer(
-            "🎉 <b>Отлично! Добро пожаловать в курс!</b>\n\n"
-            "Переходи по ссылке для оформления подписки. <b>Подписка действует 1 месяц с момента покупки.</b>\n"
-            "После оплаты ты получишь доступ ко всем материалам курса.\n\n"
-            "Пожалуйста, выбери удобный способ оплаты:",
+            f"🎉 <b>Fantastico! Benvenuta al corso!</b>\n\n"  # 🎉 <b>Отлично! Добро пожаловать в курс!</b>\n\n
+            f"Prezzo dell’abbonamento: <b>{SUBSCRIPTION_PRICE} EUR al mese</b>\n"  # Стоимость подписки: <b>{SUBSCRIPTION_PRICE} EUR в месяц</b>\n
+            f"<b>L’abbonamento è valido per 1 mese dalla data di acquisto.</b>\n"  # <b>Подписка действует 1 месяц с момента покупки.</b>\n
+            "Dopo il pagamento avrai accesso a tutti i materiali del corso.\n\n"  # После оплаты ты получишь доступ ко всем материалам курса.\n\n
+            "Per favore, scegli il metodo di pagamento che preferisci:",  # Пожалуйста, выбери удобный способ оплаты:
             reply_markup=payment_method_kb
+
         )
         await Onboarding.payment_method.set()
         await c.answer()
@@ -274,75 +313,82 @@ async def process_final_choice(c: types.CallbackQuery, state: FSMContext):
         await state.finish()
         await c.answer()
 
-# 13. Обработка выбора способа оплаты
+# 14. Обработка выбора способа оплаты
 @dp.callback_query_handler(lambda c: c.data.startswith("payment_method:"), state=Onboarding.payment_method)
 async def process_payment_method(c: types.CallbackQuery, state: FSMContext):
     chosen_method = c.data.split(":", 1)[1]
     await state.update_data(payment_method=chosen_method)
 
-    if chosen_method == "paypal":
-        payment_url = "https://www.paypal.com/"  # Заглушка для PayPal
-        payment_text = "Hai scelto PayPal. Clicca sul link per effettuare il pagamento:"  # Вы выбрали PayPal. Перейдите по ссылке для оплаты:
-    elif chosen_method == "stripe":
-        payment_url = "https://stripe.com/"  # Заглушка для Stripe
-        payment_text = "Hai scelto Stripe. Clicca sul link per effettuare il pagamento:"  # Вы выбрали Stripe. Перейдите по ссылке для оплаты:
-
-    payment_link_kb = InlineKeyboardMarkup(row_width=1).add(
-        InlineKeyboardButton("💳 Vai al pagamento", url=payment_url)  # 💳 Перейти к оплате
-    )
-
-    await c.message.answer(
-        f"{payment_text}\n\n" \
-        "Dopo il pagamento, per favore conferma lo stato del pagamento.",  # После оплаты, пожалуйста, подтвердите статус платежа.
-        reply_markup=payment_link_kb
-    )
-
-    # Предлагаем кнопки для имитации успешной/неуспешной оплаты
-    payment_status_kb = create_inline_keyboard([
-        ("✅ Pagamento effettuato con successo", "payment_success"),  # ✅ Оплата прошла успешно
-        ("❌ Pagamento non riuscito", "payment_failure")             # ❌ Оплата не прошла
-    ], prefix="payment_status", row_width=1)
-
-    await c.message.answer(
-        "Appena il pagamento sarà completato, premi uno dei pulsanti qui sotto:",  # Как только оплата будет завершена, нажмите одну из кнопок ниже:
-        reply_markup=payment_status_kb
-    )
-    await Onboarding.payment_status.set() # Переходим в новое состояние для ожидания статуса оплаты
+    if chosen_method == "stripe":
+        # Создаем сессию Stripe
+        result = StripeService.create_subscription_session(c.from_user.id)
+        
+        if result['success']:
+            # Сохраняем подписку в БД
+            db = next(get_db())
+            try:
+                create_subscription(
+                    db, 
+                    c.from_user.id, 
+                    "stripe", 
+                    result['session_id'], 
+                    SUBSCRIPTION_PRICE,
+                    result['customer_id']
+                )
+            finally:
+                db.close()
+            
+            payment_link_kb = InlineKeyboardMarkup(row_width=1).add(
+                InlineKeyboardButton("💳 Перейти к оплате", url=result['url'])
+            )
+            
+            await c.message.answer(
+                "Вы выбрали Stripe. Перейдите по ссылке для оплаты:\n\n"
+                "После оплаты вы автоматически получите доступ к закрытой группе.",
+                reply_markup=payment_link_kb
+            )
+        else:
+            await c.message.answer(
+                f"❌ Ошибка при создании платежа: {result['error']}\n\n"
+                "Попробуйте еще раз или выберите другой способ оплаты."
+            )
+            
+    elif chosen_method == "paypal":
+        # Создаем заказ PayPal
+        result = PayPalService.create_subscription_order(c.from_user.id)
+        
+        if result['success']:
+            # Сохраняем подписку в БД
+            db = next(get_db())
+            try:
+                create_subscription(
+                    db, 
+                    c.from_user.id, 
+                    "paypal", 
+                    result['order_id'], 
+                    SUBSCRIPTION_PRICE
+                )
+            finally:
+                db.close()
+            
+            payment_link_kb = InlineKeyboardMarkup(row_width=1).add(
+                InlineKeyboardButton("🅿️ Перейти к оплате", url=result['approval_url'])
+            )
+            
+            await c.message.answer(
+                "Вы выбрали PayPal. Перейдите по ссылке для оплаты:\n\n"
+                "После оплаты вы автоматически получите доступ к закрытой группе.",
+                reply_markup=payment_link_kb
+            )
+        else:
+            await c.message.answer(
+                f"❌ Ошибка при создании платежа: {result['error']}\n\n"
+                "Попробуйте еще раз или выберите другой способ оплаты."
+            )
+    
+    await state.finish()
     await c.answer()
-
-# 14. Обработка статуса оплаты
-@dp.callback_query_handler(lambda c: c.data.startswith("payment_status:"), state=Onboarding.payment_status)
-async def process_payment_status(c: types.CallbackQuery, state: FSMContext):
-    status = c.data.split(":", 1)[1]
-
-    if status == "payment_success":
-        closed_group_url = "https://t.me/+Y30wYip3LH4zNzhl"  # Заглушка для закрытой группы
-        closed_group_kb = InlineKeyboardMarkup(row_width=1).add(
-            InlineKeyboardButton("➡️ Vai al gruppo chiuso Expert Lash", url=closed_group_url)  # ➡️ Перейти в закрытую группу Expert Lash
-        )
-        await c.message.answer(
-            "🎉 <b>Congratulazioni! Il pagamento è stato effettuato con successo!</b>\n\n"  # 🎉 <b>Поздравляем! Оплата прошла успешно!</b>\n\n
-            "Ora puoi accedere al gruppo chiuso con i video corsi. Benvenuta!",  # Теперь вы можете перейти в закрытую группу с видеокурсами. Добро пожаловать!
-            reply_markup=closed_group_kb
-        )
-        await state.finish()
-    elif status == "payment_failure":
-        await c.message.answer(
-            "❌ <b>Il pagamento non è andato a buon fine.</b>\n\n"  # ❌ <b>Оплата не прошла.</b>\n\n
-            "Per favore, prova di nuovo, magari con un'altra carta o un altro metodo di pagamento."  # Пожалуйста, попробуйте еще раз, возможно, с другой картой или другим способом оплаты.
-        )
-        # Можно предложить вернуться к выбору способа оплаты
-        payment_method_kb = create_inline_keyboard([
-            ("PayPal", "paypal"),                                # PayPal
-            ("Stripe (Visa, Mastercard)", "stripe")             # Stripe (Visa, Mastercard)
-        ], prefix="payment_method", row_width=1)
-        await c.message.answer(
-            "Seleziona di nuovo il metodo di pagamento:",        # Выберите способ оплаты снова:
-            reply_markup=payment_method_kb
-        )
-        await Onboarding.payment_method.set()  # Возвращаемся в состояние выбора способа оплаты
-    await c.answer()
-
+    
 # 15. Обработка кнопки "Начать заново"
 @dp.message_handler(text="🔄 Ricomincia da capo", state="*")  # 🔄 Начать заново
 async def restart_onboarding(msg: types.Message, state: FSMContext):
