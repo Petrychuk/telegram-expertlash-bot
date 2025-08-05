@@ -16,6 +16,7 @@ from database import (
     create_tables, get_db, get_user_by_telegram_id, create_user, 
     update_user_onboarding, create_subscription, get_active_subscription
 )
+
 from payment_service import StripeService, PayPalService
 
 # 1. Загрузка .env и инициализация
@@ -27,6 +28,7 @@ dp      = Dispatcher(bot, storage=storage)
 
 # Создаем таблицы при запуске
 create_tables()
+
 
 # 2. Описание состояний онбординга
 class Onboarding(StatesGroup):

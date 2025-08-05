@@ -3,11 +3,19 @@
 ## Общая структура монорепозитория
 ```
 telegram-expertlash-bot/         # Корневая папка проекта
-├── bot/                        # Python-бот (aiogram)
-│   ├── main.py                 # Основной код бота
-│   ├── requirements.txt        # Зависимости Python
-│   ├── .env.example            # Пример файла .env
-│   └── venv/                   # (локальное) виртуальное окружение
+├── bot                               # Корневая папка для логики бота
+│   ├── venv
+│   ├── .env                          # Обновленный файл переменных окружения для бота
+│   ├── main.py                       # Теперь это bot_updated.py
+│   ├── requirements.txt              # Обновленный файл зависимостей для бота
+│   ├── .gitignore
+│   ├── config.py                     # Новая конфигурация бота
+│   ├── payment_config.py             # Настройки платежных систем
+│   ├── database.py                   # Модели БД и функции
+│   ├── payment_service.py            # Сервисы PayPal/Stripe
+│   ├── telegram_service.py           # Сервис Telegram уведомлений
+│   ├── test_system.py                # Скрипт тестирования для бота
+│   └── subscriptions.db              # База данных SQLite (создается автоматически)
 ├── webapp/                     # React Web App для интерфейса курсов
 │   ├── public/                 # Статические файлы (index.html, favicon…)
 │   ├── src/
@@ -17,6 +25,7 @@ telegram-expertlash-bot/         # Корневая папка проекта
 │   │   └── index.js            # Точка входа
 │   ├── package.json            # Зависимости и скрипты React
 │   └── .env.example            # Пример переменных окружения
+├── webhook_server.py                 # Flask сервер для вебхуков (или в отдельной папке)
 └── README.md                   # Описание проекта и инструкция по запуску
 ```
 

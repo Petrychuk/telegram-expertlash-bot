@@ -3,7 +3,6 @@ from paypalcheckoutsdk.core import PayPalHttpClient, SandboxEnvironment, LiveEnv
 from paypalcheckoutsdk.orders import OrdersCreateRequest, OrdersCaptureRequest
 from paypalcheckoutsdk.payments import CapturesRefundRequest
 from payment_config import *
-import json
 
 # Настройка Stripe
 stripe.api_key = STRIPE_SECRET_KEY
@@ -58,8 +57,8 @@ class StripeService:
                     'quantity': 1,
                 }],
                 mode='subscription',
-                success_url=PAYPAL_RETURN_URL + '?session_id={CHECKOUT_SESSION_ID}',
-                cancel_url=PAYPAL_CANCEL_URL,
+                success_url=STRIPE_RETURN_URL + '?session_id={CHECKOUT_SESSION_ID}',
+                cancel_url=STRIPE_CANCEL_URL,    
                 metadata={'telegram_id': str(telegram_id)}
             )
             
@@ -175,7 +174,63 @@ class PayPalService:
                 'success': False,
                 'error': str(e)
             }
+            
+def handle_stripe_payment_success(session):
+    """Обработка успешной Stripe-подписки"""
+    from database import activate_subscription, get_user_by_telegram_id
 
+    try:
+        session_id = session['id']
+        customer_id = session.get('customer')
+        telegram_id = session.get('metadata', {}).get('telegram_id')
+
+        if not telegram_id:
+            print(f"[Stripe] Не указан telegram_id в metadata: {session_id}")
+            return
+
+        telegram_id = int(telegram_id)
+        user = get_user_by_telegram_id(telegram_id)
+
+        if not user:
+            print(f"[Stripe] Пользователь с telegram_id={telegram_id} не найден в БД")
+            return
+
+        activate_subscription(user['id'], 'stripe', customer_id)
+        print(f"[Stripe] Подписка активирована для telegram_id={telegram_id}")
+
+    except Exception as e:
+        print(f"[Stripe] Ошибка при обработке подписки: {e}")
+        
+def handle_stripe_payment_failed(event):
+    """Обработка неуспешной оплаты в Stripe"""
+    session = event['data']['object']
+    telegram_id = session.get('metadata', {}).get('telegram_id')
+
+    if not telegram_id:
+        print(f"[Stripe] Неудачная оплата: нет telegram_id в metadata (session_id={session.get('id')})")
+        return
+
+    print(f"[Stripe] Оплата не прошла для Telegram ID: {telegram_id} (session_id={session.get('id')})")
+    # Здесь можно отправить сообщение в Telegram, уведомить пользователя и т.д.
+
+def handle_stripe_subscription_cancelled(event):
+    """Обработка отмены подписки в Stripe"""
+    from database import cancel_subscription
+
+    try:
+        subscription = event['data']['object']
+        customer_id = subscription.get('customer')
+
+        if not customer_id:
+            print("[Stripe] Нет customer_id при отмене подписки")
+            return
+
+        cancel_subscription('stripe', customer_id)
+        print(f"[Stripe] Подписка отменена для customer_id={customer_id}")
+
+    except Exception as e:
+        print(f"[Stripe] Ошибка при отмене подписки: {e}")
+            
 def verify_stripe_webhook(payload, sig_header):
     """Проверка подписи Stripe webhook"""
     try:
