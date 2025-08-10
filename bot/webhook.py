@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, redirect
 from flask_cors import CORS
 import stripe
 import threading
@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from functools import wraps
 
 from payment_config import STRIPE_WEBHOOK_SECRET, PAYPAL_WEBHOOK_ID, CLOSED_GROUP_LINK
-from payment_service import verify_stripe_webhook, verify_paypal_webhook
+from payment_service import verify_stripe_webhook, verify_paypal_webhook, PayPalService
 from database import (
     get_db, get_subscription_by_id, activate_subscription,
     cancel_subscription, get_user_by_telegram_id
@@ -54,7 +54,6 @@ def stripe_webhook():
 
         logger.info(f"Stripe webhook received: {event['type']}")
         data = event['data']['object']
-
         handlers = {
             'checkout.session.completed': handle_stripe_payment_success,
             'customer.subscription.created': handle_stripe_subscription_created,
@@ -76,52 +75,88 @@ def stripe_webhook():
         logger.error(f"Stripe webhook error: {e}")
         return jsonify({'error': 'Webhook processing failed'}), 500
 
+from database import get_db, activate_subscription, cancel_subscription
+
 @app.route('/webhook/paypal', methods=['POST'])
 def paypal_webhook():
+    headers = request.headers
+    body = request.get_data(as_text=True)
+
+    if not verify_paypal_webhook(headers, body):
+        logger.warning("PayPal webhook verification failed")
+        return jsonify({'error': 'Invalid signature'}), 400
+    
+    data = request.get_json()
+    event_type = data.get('event_type')
+    resource = data.get('resource', {})
+    
+    logger.info(f"PayPal webhook: {event_type}")
+
+    db = next(get_db())
     try:
-        headers = request.headers
-        body = request.get_data('utf-8')
+        telegram_id = resource.get("custom_id")
+        subscription_id = resource.get("id")
+        
+        if event_type == "BILLING.SUBSCRIPTION.ACTIVATED":
+            logger.info(f"Подписка активирована: {telegram_id}")
+            subscription = activate_subscription(db, order_id=subscription_id, telegram_id=telegram_id)
+            
+            if subscription:              
+                run_async_in_thread(
+                    telegram_service.send_payment_success_notification(telegram_id, subscription)
+                )
+            else:
+                logger.error(f"Подписка не найдена или не активирована для order_id={subscription_id}")
 
-        if not verify_paypal_webhook(headers, body):
-            return jsonify({'error': 'Invalid signature'}), 400
+        elif event_type in ("BILLING.SUBSCRIPTION.CANCELLED", "BILLING.SUBSCRIPTION.EXPIRED"):
+            logger.info(f"Подписка отменена или истекла: {telegram_id}")
+            cancel_subscription(db, subscription_id=subscription_id)
 
-        data = request.get_json()
-        event_type = data.get('event_type')
-        resource = data.get('resource', {})
+        elif event_type == "BILLING.SUBSCRIPTION.PAYMENT.FAILED":
+            logger.warning(f"Проблема с оплатой подписки: {telegram_id}")
+    finally:
+        db.close()
 
-        logger.info(f"PayPal webhook received: {event_type}")
-
-        handlers = {
-            'PAYMENT.SALE.COMPLETED': handle_paypal_payment_success,
-            'BILLING.SUBSCRIPTION.CREATED': handle_paypal_subscription_created,
-            'BILLING.SUBSCRIPTION.CANCELLED': handle_paypal_subscription_cancelled,
-            'BILLING.SUBSCRIPTION.PAYMENT.FAILED': handle_paypal_payment_failed,
-        }
-
-        handler = handlers.get(event_type)
-        if handler:
-            handler(resource)
-        else:
-            logger.info(f"Unhandled PayPal event type: {event_type}")
-
-        return jsonify({'status': 'success'}), 200
-
-    except Exception as e:
-        logger.error(f"PayPal webhook error: {e}")
-        return jsonify({'error': 'Webhook processing failed'}), 500
+    return jsonify({'status': 'ok'}), 200
 
 # === Stripe Handlers ===
 @with_db_session
 def handle_stripe_payment_success(db, session):
+    """Обработка успешной оплаты Stripe"""
     telegram_id = session.get('metadata', {}).get('telegram_id')
     if not telegram_id:
         logger.error(f"No telegram_id in session: {session['id']}")
         return
 
     telegram_id = int(telegram_id)
-    subscription = activate_subscription(db, session['id'])
+    subscription_id = session.get('subscription')
+    if not subscription_id:
+       logger.error(f"No subscription id in session: {session['id']}")
+       return
+
+    subscription = activate_subscription(db, subscription_id)
     if subscription:
-        run_async_in_thread(telegram_service.send_payment_success_notification(telegram_id, subscription))
+        logger.info(f"Stripe subscription activated: {subscription_id} for telegram_id {telegram_id}")
+    else:
+        logger.error(f"Failed to activate Stripe subscription: {subscription_id}")
+        
+@with_db_session
+def handle_stripe_payment_succeeded(db, invoice):
+    logger.info(f"handle_stripe_payment_succeeded called with invoice data: {invoice}")
+    subscription_id = invoice.get('subscription')
+    if not subscription_id:
+        logger.warning("No subscription ID found in invoice, skipping subscription activation")
+        return
+
+    sub = get_subscription_by_id(db, subscription_id)
+    if sub:
+        sub.expires_at = datetime.utcnow() + timedelta(days=30)
+        sub.status = "active"
+        sub.has_group_access = True
+        logger.info(f"Subscription {subscription_id} activated")
+        run_async_in_thread(telegram_service.send_subscription_renewed_notification(sub.telegram_id, sub))
+    else:
+        logger.error(f"Subscription not found for id: {subscription_id}")
 
 @with_db_session
 def handle_stripe_subscription_created(db, subscription):
@@ -137,39 +172,127 @@ def handle_stripe_subscription_updated(db, subscription):
 
 @with_db_session
 def handle_stripe_subscription_cancelled(db, subscription):
-    sub = cancel_subscription(db, subscription['id'])
+    sub = get_subscription_by_id(db, subscription['id'])
     if sub:
+        sub.status = "canceled"
+        sub.has_group_access = False
+        logger.info(f"Subscription {subscription['id']} canceled — доступ закрыт")
         run_async_in_thread(telegram_service.send_subscription_cancelled_notification(sub.telegram_id))
-
-@with_db_session
-def handle_stripe_payment_succeeded(db, invoice):
-    sub = get_subscription_by_id(db, invoice.get('subscription'))
-    if sub:
-        sub.expires_at = datetime.utcnow() + timedelta(days=30)
-        sub.status = "active"
-        sub.has_group_access = True
-        run_async_in_thread(telegram_service.send_subscription_renewed_notification(sub.telegram_id, sub))
+    else:
+        logger.error(f"Subscription not found for cancellation id: {subscription['id']}")
 
 @with_db_session
 def handle_stripe_payment_failed(db, invoice):
-    sub = get_subscription_by_id(db, invoice.get('subscription'))
+    subscription_id = invoice.get('subscription')
+    if not subscription_id:
+        logger.warning("No subscription ID found in failed invoice")
+        return
+    
+    sub = get_subscription_by_id(db, subscription_id)
     if sub:
+        # Можно обновить статус, например:
+        sub.status = "past_due"
+        sub.has_group_access = False
+        logger.info(f"Subscription {subscription_id} payment failed — доступ закрыт")
         run_async_in_thread(telegram_service.send_payment_failed_notification(sub.telegram_id))
+    else:
+        logger.error(f"Subscription not found for failed invoice id: {subscription_id}")
 
 # === PayPal Handlers ===
 @with_db_session
 def handle_paypal_payment_success(db, resource):
-    telegram_id = int(resource.get('custom'))
-    order_id = resource.get('parent_payment')
-    subscription = activate_subscription(db, order_id)
+    logger.info(f"PayPal resource received: {resource}")
+
+    telegram_id = None
+    subscription_id = None
+
+    # Попытка получить telegram_id из custom/custom_id
+    if 'custom' in resource:
+        telegram_id = resource.get('custom')
+    elif 'custom_id' in resource:
+        telegram_id = resource.get('custom_id')
+    elif 'supplementary_data' in resource and 'custom' in resource['supplementary_data']:
+        telegram_id = resource['supplementary_data']['custom']
+
+    try:
+        telegram_id = int(telegram_id)
+    except (TypeError, ValueError):
+        logger.error(f"Invalid or missing telegram_id: {telegram_id}")
+        return
+
+    # Попытка получить subscription ID
+    subscription_id = (
+        resource.get('billing_agreement_id')
+        or resource.get('subscription_id')
+        or resource.get('id')
+    )
+    logger.info(f"Extracted subscription_id: {subscription_id}")
+    if not subscription_id:
+        logger.error("No valid subscription ID found in PayPal resource")
+        return
+
+    subscription = activate_subscription(db, subscription_id)
     if subscription:
-        run_async_in_thread(telegram_service.send_payment_success_notification(telegram_id, subscription))
+        logger.info(f"Subscription activated: {subscription}")
+        run_async_in_thread(
+             telegram_service.send_payment_success_notification(telegram_id, subscription)
+        )
+        logger.info(f"Payment success notification sent for telegram_id {telegram_id}")
+    else:
+        logger.error(f"Subscription not found or could not be activated: {subscription_id}")
 
 @with_db_session
 def handle_paypal_subscription_created(db, resource):
     logger.info(f"PayPal subscription created: {resource.get('id')}")
     # реализация при необходимости
 
+@with_db_session
+def handle_paypal_checkout_order_approved(db, resource):
+    try:
+        telegram_id = int(resource.get('custom'))
+    except (TypeError, ValueError):
+        logger.error("Invalid or missing telegram_id in CHECKOUT.ORDER.APPROVED")
+        return
+
+    subscription_id = resource.get('id')
+    if not subscription_id:
+        logger.error("Missing subscription_id in CHECKOUT.ORDER.APPROVED")
+        return
+
+    subscription = activate_subscription(db, subscription_id)
+    if subscription:
+        run_async_in_thread(
+            telegram_service.send_payment_success_notification(telegram_id, subscription)
+        )
+        logger.info(f"[CHECKOUT.ORDER.APPROVED] Subscription activated for user {telegram_id}")
+    else:
+        logger.error(f"[CHECKOUT.ORDER.APPROVED] Could not activate subscription: {subscription_id}")
+
+@with_db_session
+def handle_paypal_capture_completed(db, resource):
+    """Обработка успешного завершения захвата платежа PayPal"""
+    order_id = resource.get('supplementary_data', {}).get('related_ids', {}).get('order_id')
+    custom_id = resource.get('custom_id')
+
+    if not order_id or not custom_id:
+        logger.error("Missing order_id or custom_id in PAYPAL_CAPTURE_COMPLETED webhook")
+        return
+
+    try:
+        telegram_id = int(custom_id)
+    except Exception:
+        logger.error(f"Invalid telegram_id: {custom_id}")
+        return
+
+    subscription = activate_subscription(db, order_id)
+    if subscription:
+        logger.info(f"PayPal subscription activated: {order_id} for telegram_id {telegram_id}")
+        run_async_in_thread(
+            telegram_service.send_payment_success_notification(telegram_id, subscription)
+        )
+    else:
+        logger.error(f"Failed to activate PayPal subscription: {order_id}")
+        
 @with_db_session
 def handle_paypal_subscription_cancelled(db, resource):
     sub = cancel_subscription(db, resource.get('id'))
@@ -188,8 +311,34 @@ def health_check():
     return jsonify({'status': 'healthy', 'timestamp': datetime.utcnow().isoformat()}), 200
 
 @app.route('/stripe/return', methods=['GET'])
-def stripe_return():
-    return "<h2>✅ Stripe: Подписка успешно оформлена.</h2>", 200
+@with_db_session
+def stripe_return(db):
+    session_id = request.args.get('session_id')
+    if not session_id:
+        return "<h2>Ошибка: session_id отсутствует</h2>", 400
+
+    # Тут нужно получить подписку по session_id
+    # Предположим, что в базе subscription_id == session_id (или в метаданных)
+    subscription = get_subscription_by_id(db, session_id)
+    if not subscription:
+        # Возможно, session_id это id checkout сессии, тогда придется искать по другому
+        return "<h2>Подписка не найдена</h2>", 404
+
+    # Активируем подписку (если еще не активирована)
+    if subscription.status != "active":
+        subscription.status = "active"
+        subscription.activated_at = datetime.utcnow()
+        subscription.expires_at = subscription.activated_at + timedelta(days=30)
+        subscription.has_group_access = True
+        db.commit()
+
+    # Отправка уведомления в Telegram (асинхронно)
+    run_async_in_thread(
+        telegram_service.send_payment_success_notification(subscription.telegram_id, subscription)
+    )
+
+    # Редирект на закрытую группу
+    return redirect(CLOSED_GROUP_LINK)
 
 @app.route('/stripe/cancel', methods=['GET'])
 def stripe_cancel():
@@ -197,7 +346,10 @@ def stripe_cancel():
 
 @app.route('/paypal/return', methods=['GET'])
 def paypal_return():
-    return "<h2>✅ PayPal: Оплата завершена успешно.</h2>", 200
+    subscription_id = request.args.get('token')
+    logger.info(f"PayPal return received: subscription_id={subscription_id}")
+    
+    return redirect(CLOSED_GROUP_LINK)
 
 @app.route('/paypal/cancel', methods=['GET'])
 def paypal_cancel():

@@ -1,4 +1,6 @@
 import os
+import asyncio
+import logging
 from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import (
@@ -18,6 +20,7 @@ from database import (
 )
 
 from payment_service import StripeService, PayPalService
+from telegram_service import TelegramService, manage_group_access_loop
 
 # 1. Загрузка .env и инициализация
 load_dotenv()
@@ -28,7 +31,6 @@ dp      = Dispatcher(bot, storage=storage)
 
 # Создаем таблицы при запуске
 create_tables()
-
 
 # 2. Описание состояний онбординга
 class Onboarding(StatesGroup):
@@ -69,7 +71,6 @@ async def send_video_or_placeholder(message, file_id, caption, placeholder_text)
         await message.answer(f"🎬 {placeholder_text}\n\n<i>Il video non è temporaneamente disponibile</i>")  # 🎬 {placeholder_text}\n\n<i>Видео временно недоступно</i>
 
 # 6. Функция для работы с базой данных
-
 def get_or_create_user(telegram_id: int, username: str = None, first_name: str = None, last_name: str = None):
     
     # Получение или создание пользователя
@@ -332,10 +333,10 @@ async def process_payment_method(c: types.CallbackQuery, state: FSMContext):
                 create_subscription(
                     db, 
                     c.from_user.id, 
-                    "stripe", 
-                    result['session_id'], 
-                    SUBSCRIPTION_PRICE,
-                    result['customer_id']
+                    payment_system="stripe", 
+                    subscription_id=result['session_id'], 
+                    amount=SUBSCRIPTION_PRICE,
+                    customer_id=result.get('customer_id')
                 )
             finally:
                 db.close()
@@ -356,8 +357,8 @@ async def process_payment_method(c: types.CallbackQuery, state: FSMContext):
             )
             
     elif chosen_method == "paypal":
-        # Создаем заказ PayPal
-        result = PayPalService.create_subscription_order(c.from_user.id)
+        # Создаем подписку PayPal
+        result = PayPalService.create_subscription(c.from_user.id)
         
         if result['success']:
             # Сохраняем подписку в БД
@@ -366,9 +367,9 @@ async def process_payment_method(c: types.CallbackQuery, state: FSMContext):
                 create_subscription(
                     db, 
                     c.from_user.id, 
-                    "paypal", 
-                    result['order_id'], 
-                    SUBSCRIPTION_PRICE
+                    payment_system="paypal", 
+                    subscription_id=result['subscription_id'],  # pay attention: 'subscription_id' from PayPal response
+                    amount=SUBSCRIPTION_PRICE
                 )
             finally:
                 db.close()
@@ -422,7 +423,53 @@ async def show_consultation_info(msg: types.Message):
         reply_markup=consultation_kb
     )
 
-# 18. Обработка любых других сообщений в процессе онбординга
+# 18. Обработка кнопки "Моя подписка"
+@dp.message_handler(text="💳 Il mio abbonamento", state="*")
+async def show_my_subscription(msg: types.Message, state: FSMContext):
+    db = next(get_db())
+    try:
+        user = get_user_by_telegram_id(db, msg.from_user.id)
+        if not user:
+            await msg.answer(
+                f"❌ На данный момент у вас нет активной подписки.\n\n"
+                f"Вы можете оформить доступ к нашему закрытому сообществу всего за {SUBSCRIPTION_PRICE}€ в месяц.\n\n"
+                "Выберите способ оплаты:",
+                reply_markup=create_inline_keyboard([
+                    ("PayPal", "paypal"),
+                    ("Stripe (Visa, Mastercard)", "stripe")
+                ], prefix="payment_method", row_width=1)
+            )
+            await Onboarding.payment_method.set()  # <- Добавь это!
+            return
+
+        subscription = get_active_subscription(db, msg.from_user.id)
+        if subscription:
+            start_date = subscription.created_at.strftime('%d.%m.%Y') if subscription.created_at else "—"
+            end_date = subscription.expires_at.strftime('%d.%m.%Y') if subscription.expires_at else "—"
+            order_id = getattr(subscription, "order_id", getattr(subscription, "payment_id", "—"))
+
+            await msg.answer(
+                f"💳 <b>La tua sottoscrizione è attiva!</b>\n\n"
+                f"📅 Data di attivazione: <b>{start_date}</b>\n"
+                f"🔢 Numero ordine: <b>{order_id}</b>\n"
+                f"⏳ Valida fino al: <b>{end_date}</b>\n\n"
+                f"✅ Grazie per essere con noi!"
+            )
+        else:
+            await msg.answer(
+                f"❌ На данный момент у вас нет активной подписки.\n\n"
+                f"Вы можете оформить доступ к нашему закрытому сообществу всего за {SUBSCRIPTION_PRICE}€ в месяц.\n\n"
+                "Выберите способ оплаты:",
+                reply_markup=create_inline_keyboard([
+                    ("PayPal", "paypal"),
+                    ("Stripe (Visa, Mastercard)", "stripe")
+                ], prefix="payment_method", row_width=1)
+            )
+            await Onboarding.payment_method.set()  # <- И здесь тоже!
+    finally:
+        db.close()
+
+# 19. Обработка любых других сообщений в процессе онбординга
 @dp.message_handler(state="*")
 async def handle_other_messages(msg: types.Message, state: FSMContext):
     current_state = await state.get_state()
@@ -438,3 +485,14 @@ async def handle_other_messages(msg: types.Message, state: FSMContext):
 
 if __name__ == "__main__":
     executor.start_polling(dp, skip_updates=True)
+    
+async def startup_tasks():
+    asyncio.create_task(manage_group_access_loop())
+
+async def main():
+    await startup_tasks()
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
+    asyncio.run(main())

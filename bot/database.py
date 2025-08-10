@@ -1,29 +1,38 @@
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, Boolean, Float, text
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, scoped_session
-from datetime import datetime, timedelta
 import os
+from datetime import datetime, timedelta
 
-# Настройка базы данных
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DATABASE_URL = f"sqlite:///{os.path.join(BASE_DIR, 'subscriptions.db')}"
-engine = create_engine(
-    DATABASE_URL, 
-    connect_args={"check_same_thread": False},  # важно для работы в async/многопоточности
-    pool_size=5,  # по желанию, но с SQLite осторожно
-    max_overflow=10
+from sqlalchemy import (
+    create_engine, Column, Integer, String, Float,
+    Boolean, DateTime, BigInteger
 )
-    
-SessionLocal = scoped_session(sessionmaker(autocommit=False, autoflush=False, bind=engine))
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
+from dotenv import load_dotenv
+
+# Загрузка переменных окружения
+load_dotenv()
+
+# Получение данных подключения из .env
+DB_USER = os.getenv("user")
+DB_PASSWORD = os.getenv("password")
+DB_HOST = os.getenv("host")
+DB_PORT = os.getenv("port")
+DB_NAME = os.getenv("dbname")
+
+# Формирование строки подключения
+DATABASE_URL = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+engine = create_engine(DATABASE_URL, pool_pre_ping=True)
+
+# Настройка SQLAlchemy
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
-print(f"Using database at: {DATABASE_URL}")
-
+# Модель пользователя
 class User(Base):
     __tablename__ = "users"
     
     id = Column(Integer, primary_key=True, index=True)
-    telegram_id = Column(Integer, unique=True, index=True)
+    telegram_id = Column(BigInteger, unique=True, index=True, nullable=False)
     username = Column(String, nullable=True)
     first_name = Column(String, nullable=True)
     last_name = Column(String, nullable=True)
@@ -35,21 +44,23 @@ class User(Base):
     time_choice = Column(String, nullable=True)
     goal_choice = Column(String, nullable=True)
 
+# Модель подписки
 class Subscription(Base):
     __tablename__ = "subscriptions"
     
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, index=True)  # Связь с User.id
-    telegram_id = Column(Integer, index=True)  # Дублируем для быстрого поиска
+    telegram_id = Column(BigInteger, unique=True, index=True, nullable=False)  # Дублируем для быстрого поиска
     
     # Платежная система
     payment_system = Column(String)  # "paypal" или "stripe"
-    subscription_id = Column(String, unique=True, index=True)  # ID подписки в платежной системе
-    customer_id = Column(String, nullable=True)  # ID клиента в платежной системе
+    subscription_id = Column(String, unique=True, index=True)  # ID подписки в платёжной системе
+    customer_id = Column(String, nullable=True)  # ID клиента в платёжной системе
     
     # Статус подписки
+    order_id = Column(String, unique=True, index=True, nullable=True)
     status = Column(String, default="pending")  # pending, active, cancelled, expired
-    amount = Column(Float)  # Сумма подписки
+    amount = Column(Float)
     currency = Column(String, default="EUR")
     
     # Даты
@@ -62,24 +73,24 @@ class Subscription(Base):
     has_group_access = Column(Boolean, default=False)
     group_joined_at = Column(DateTime, nullable=True)
 
+# Создание таблиц
 def create_tables():
-    """Создание всех таблиц в базе данных"""
     Base.metadata.create_all(bind=engine)
 
+# Получение сессии
 def get_db():
-    """Получение сессии базы данных"""
     db = SessionLocal()
     try:
         yield db
     finally:
         db.close()
 
+# Получение пользователя по Telegram ID
 def get_user_by_telegram_id(db, telegram_id: int):
-    """Получение пользователя по Telegram ID"""
     return db.query(User).filter(User.telegram_id == telegram_id).first()
 
+# Создание нового пользователя
 def create_user(db, telegram_id: int, username: str = None, first_name: str = None, last_name: str = None):
-    """Создание нового пользователя"""
     user = User(
         telegram_id=telegram_id,
         username=username,
@@ -91,8 +102,8 @@ def create_user(db, telegram_id: int, username: str = None, first_name: str = No
     db.refresh(user)
     return user
 
+# Обновление онбординга
 def update_user_onboarding(db, telegram_id: int, format_choice: str, level_choice: str, time_choice: str, goal_choice: str):
-    """Обновление данных онбординга пользователя"""
     user = get_user_by_telegram_id(db, telegram_id)
     if user:
         user.format_choice = format_choice
@@ -103,8 +114,8 @@ def update_user_onboarding(db, telegram_id: int, format_choice: str, level_choic
         db.refresh(user)
     return user
 
+# Создание подписки
 def create_subscription(db, telegram_id: int, payment_system: str, subscription_id: str, amount: float, customer_id: str = None):
-    """Создание новой подписки"""
     user = get_user_by_telegram_id(db, telegram_id)
     if not user:
         return None
@@ -114,6 +125,7 @@ def create_subscription(db, telegram_id: int, payment_system: str, subscription_
         telegram_id=telegram_id,
         payment_system=payment_system,
         subscription_id=subscription_id,
+        order_id=subscription_id,
         customer_id=customer_id,
         amount=amount,
         status="pending"
@@ -123,20 +135,41 @@ def create_subscription(db, telegram_id: int, payment_system: str, subscription_
     db.refresh(subscription)
     return subscription
 
-def activate_subscription(db, subscription_id: str):
-    """Активация подписки"""
-    subscription = db.query(Subscription).filter(Subscription.subscription_id == subscription_id).first()
-    if subscription:
-        subscription.status = "active"
-        subscription.activated_at = datetime.utcnow()
-        subscription.expires_at = datetime.utcnow() + timedelta(days=30)  # 30 дней
-        subscription.has_group_access = True
-        db.commit()
-        db.refresh(subscription)
+# Активация подписки
+def activate_subscription(db, order_id=None, telegram_id=None, amount=None, currency=None):
+    subscription = None
+    if order_id:
+        subscription = db.query(Subscription).filter_by(order_id=order_id).first()
+    if not subscription and telegram_id:
+        subscription = db.query(Subscription).filter_by(telegram_id=telegram_id).first()
+
+    if not subscription:
+        return None
+
+    subscription.status = "active"  # Обязательно обновить статус
+    subscription.activated_at = subscription.activated_at or datetime.utcnow()
+    subscription.expires_at = subscription.activated_at + timedelta(days=30)
+    subscription.has_group_access = True
+    subscription.group_joined_at = subscription.group_joined_at or datetime.utcnow()
+
+    if amount is not None:
+        subscription.amount = amount
+    if currency is not None:
+        subscription.currency = currency
+
+    if telegram_id:
+        subscription.telegram_id = telegram_id
+        user = db.query(User).filter_by(telegram_id=telegram_id).first()
+        if user:
+            subscription.user_id = user.id
+
+    db.commit()
+    db.refresh(subscription)
     return subscription
 
+
+# Отмена подписки
 def cancel_subscription(db, subscription_id: str):
-    """Отмена подписки"""
     subscription = db.query(Subscription).filter(Subscription.subscription_id == subscription_id).first()
     if subscription:
         subscription.status = "cancelled"
@@ -146,14 +179,16 @@ def cancel_subscription(db, subscription_id: str):
         db.refresh(subscription)
     return subscription
 
+# Получение активной подписки
 def get_active_subscription(db, telegram_id: int):
-    """Получение активной подписки пользователя"""
     return db.query(Subscription).filter(
         Subscription.telegram_id == telegram_id,
         Subscription.status == "active",
         Subscription.expires_at > datetime.utcnow()
     ).first()
 
+# Получение подписки по ID
 def get_subscription_by_id(db, subscription_id: str):
-    """Получение подписки по ID"""
     return db.query(Subscription).filter(Subscription.subscription_id == subscription_id).first()
+
+

@@ -67,3 +67,4 @@ pprint(vars(user))
 sub = get_subscription_by_id(database, "sub_001")
 print("🔍 Подписка по ID:")
 pprint(vars(sub) if sub else "Не найдена")
+
