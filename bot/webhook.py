@@ -361,3 +361,21 @@ if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
     # debug оставляем только для локалки либо через FLASK_ENV
     app.run(host='0.0.0.0', port=port)
+
+@app.route('/')
+def index():
+    return "Bot is running!"
+
+if __name__ == '__main__':
+    flask_env = os.environ.get("FLASK_ENV", "production").lower()
+
+    if flask_env == "development":
+        # Локальная разработка
+        port = 5000
+        debug = True
+    else:
+        # Продакшен
+        port = 8080
+        debug = False
+
+    app.run(host='0.0.0.0', port=port, debug=debug)
