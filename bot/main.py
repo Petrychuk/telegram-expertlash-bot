@@ -342,19 +342,27 @@ async def process_payment_method(c: types.CallbackQuery, state: FSMContext):
                 db.close()
             
             payment_link_kb = InlineKeyboardMarkup(row_width=1).add(
-                InlineKeyboardButton("💳 Перейти к оплате", url=result['url'])
+                # Кнопка для перехода к оплате
+                InlineKeyboardButton("💳 Procedi al pagamento", url=result['url']) # перейти к оплате
+
             )
             
+            # Вы выбрали Stripe. Перейдите по ссылке для оплаты:
+            # После оплаты вы автоматически получите доступ к закрытой группе.
             await c.message.answer(
-                "Вы выбрали Stripe. Перейдите по ссылке для оплаты:\n\n"
-                "После оплаты вы автоматически получите доступ к закрытой группе.",
+                "Hai scelto Stripe. Segui il link per effettuare il pagamento:\n\n"
+                "Dopo il pagamento riceverai automaticamente l'accesso al gruppo privato.",
                 reply_markup=payment_link_kb
             )
+
         else:
+            # ❌ Ошибка при создании платежа: {result['error']}
+            # Попробуйте еще раз или выберите другой способ оплаты.
             await c.message.answer(
-                f"❌ Ошибка при создании платежа: {result['error']}\n\n"
-                "Попробуйте еще раз или выберите другой способ оплаты."
+                f"❌ Errore durante la creazione del pagamento: {result['error']}\n\n"
+                "Riprova oppure scegli un altro metodo di pagamento."
             )
+
             
     elif chosen_method == "paypal":
         # Создаем подписку PayPal
@@ -375,18 +383,23 @@ async def process_payment_method(c: types.CallbackQuery, state: FSMContext):
                 db.close()
             
             payment_link_kb = InlineKeyboardMarkup(row_width=1).add(
-                InlineKeyboardButton("🅿️ Перейти к оплате", url=result['approval_url'])
+                InlineKeyboardButton("🅿️ Procedi al pagamento", url=result['approval_url']) #Перейти к оплате
             )
             
+            # Вы выбрали PayPal. Перейдите по ссылке для оплаты:
+            # После оплаты вы автоматически получите доступ к закрытой группе.
             await c.message.answer(
-                "Вы выбрали PayPal. Перейдите по ссылке для оплаты:\n\n"
-                "После оплаты вы автоматически получите доступ к закрытой группе.",
+                "Hai scelto PayPal. Segui il link per effettuare il pagamento:\n\n"
+                "Dopo il pagamento riceverai automaticamente l'accesso al gruppo privato.",
                 reply_markup=payment_link_kb
             )
+
         else:
+            # ❌ Ошибка при создании платежа: {result['error']}
+            # Попробуйте еще раз или выберите другой способ оплаты.
             await c.message.answer(
-                f"❌ Ошибка при создании платежа: {result['error']}\n\n"
-                "Попробуйте еще раз или выберите другой способ оплаты."
+                f"❌ Errore durante la creazione del pagamento: {result['error']}\n\n"
+                "Riprova oppure scegli un altro metodo di pagamento."
             )
     
     await state.finish()
@@ -430,15 +443,16 @@ async def show_my_subscription(msg: types.Message, state: FSMContext):
     try:
         user = get_user_by_telegram_id(db, msg.from_user.id)
         if not user:
+           
+            # ❌ На данный момент у вас нет активной подписки.
+            # Вы можете оформить доступ к нашему закрытому сообществу всего за {SUBSCRIPTION_PRICE}€ в месяц.
+            # Выберите способ оплаты:
             await msg.answer(
-                f"❌ На данный момент у вас нет активной подписки.\n\n"
-                f"Вы можете оформить доступ к нашему закрытому сообществу всего за {SUBSCRIPTION_PRICE}€ в месяц.\n\n"
-                "Выберите способ оплаты:",
-                reply_markup=create_inline_keyboard([
-                    ("PayPal", "paypal"),
-                    ("Stripe (Visa, Mastercard)", "stripe")
-                ], prefix="payment_method", row_width=1)
+                f"❌ Al momento non hai un abbonamento attivo.\n\n"
+                f"Puoi ottenere l'accesso alla nostra community privata per soli {SUBSCRIPTION_PRICE}€ al mese.\n\n"
+                "Scegli il metodo di pagamento:",
             )
+
             await Onboarding.payment_method.set()  # <- Добавь это!
             return
 
@@ -457,9 +471,9 @@ async def show_my_subscription(msg: types.Message, state: FSMContext):
             )
         else:
             await msg.answer(
-                f"❌ На данный момент у вас нет активной подписки.\n\n"
-                f"Вы можете оформить доступ к нашему закрытому сообществу всего за {SUBSCRIPTION_PRICE}€ в месяц.\n\n"
-                "Выберите способ оплаты:",
+                f"❌ Al momento non hai un abbonamento attivo.\n\n"
+                f"Puoi ottenere l'accesso alla nostra community privata per soli {SUBSCRIPTION_PRICE}€ al mese.\n\n"
+                "Scegli il metodo di pagamento:",
                 reply_markup=create_inline_keyboard([
                     ("PayPal", "paypal"),
                     ("Stripe (Visa, Mastercard)", "stripe")

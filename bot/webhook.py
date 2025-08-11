@@ -1,3 +1,5 @@
+import os
+
 from flask import Flask, request, jsonify, redirect
 from flask_cors import CORS
 import stripe
@@ -318,7 +320,6 @@ def stripe_return(db):
         return "<h2>Ошибка: session_id отсутствует</h2>", 400
 
     # Тут нужно получить подписку по session_id
-    # Предположим, что в базе subscription_id == session_id (или в метаданных)
     subscription = get_subscription_by_id(db, session_id)
     if not subscription:
         # Возможно, session_id это id checkout сессии, тогда придется искать по другому
@@ -356,4 +357,7 @@ def paypal_cancel():
     return "<h2>❌ PayPal: Вы отменили оплату.</h2>", 200
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    # app.run(host='0.0.0.0', port=5000, debug=True)
+    port = int(os.environ.get("PORT", 5000))
+    # debug оставляем только для локалки либо через FLASK_ENV
+    app.run(host='0.0.0.0', port=port)

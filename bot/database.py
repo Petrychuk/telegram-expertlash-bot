@@ -13,11 +13,11 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Получение данных подключения из .env
-DB_USER = os.getenv("user")
-DB_PASSWORD = os.getenv("password")
-DB_HOST = os.getenv("host")
-DB_PORT = os.getenv("port")
-DB_NAME = os.getenv("dbname")
+DB_USER = os.getenv("DB_USER")
+DB_PASSWORD = os.getenv("DB_PASSWORD")
+DB_HOST = os.getenv("DB_HOST")
+DB_PORT = os.getenv("DB_PORT")
+DB_NAME = os.getenv("DB_NAME")
 
 # Формирование строки подключения
 DATABASE_URL = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"

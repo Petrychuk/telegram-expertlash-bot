@@ -45,8 +45,11 @@ class StripeService:
                 product = stripe.Product.retrieve('lash_course_subscription')
             except stripe.error.InvalidRequestError:
                 product = stripe.Product.create(
-                    name='Курс "Ресницы от нуля до эксперта"',
-                    description='Месячная подписка на курс по наращиванию ресниц'
+                    # Курс "Ресницы от нуля до эксперта"
+                    name='Corso "Extension ciglia: da principiante a esperto"',
+                    # Месячная подписка на курс по наращиванию ресниц
+                    description='Abbonamento mensile al corso di extension ciglia'
+
                 )
             try:
                 price = stripe.Price.retrieve('price_1Rs2wB6S8Oc0JZWfqIIhtXze')
@@ -253,9 +256,7 @@ def verify_paypal_webhook(headers, body) -> bool:
         return False
 
 def get_paypal_access_token() -> str | None:
-    """
-    Получение OAuth токена PayPal для вызова API.
-    """
+    """Получение OAuth токена PayPal для вызова API."""
     url = f"{PAYPAL_API_BASE}/v1/oauth2/token"
     headers = {
         "Accept": "application/json",
