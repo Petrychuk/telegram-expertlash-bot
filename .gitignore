@@ -32,5 +32,4 @@ tests/__pycache__/
 *.env
 .env.prod
 
-payment_config.py
 subscriptions.db
