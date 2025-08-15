@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 
 from sqlalchemy import (
     create_engine, Column, Integer, String, Float,
-    Boolean, DateTime, BigInteger
+    Boolean, DateTime, BigInteger,  or_
 )
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
@@ -137,30 +137,48 @@ def create_subscription(db, telegram_id: int, payment_system: str, subscription_
 
 # Активация подписки
 def activate_subscription(db, order_id=None, telegram_id=None, amount=None, currency=None):
+    """
+    Активирует подписку, пытаясь найти её по разным ключам:
+    - order_id (могут прислать PayPal/Billing или Stripe Checkout id)
+    - subscription_id (часто совпадает с PayPal resource.id или Stripe subscription)
+    - telegram_id (фоллбек на последнюю подписку пользователя)
+    """
     subscription = None
+
+    # 1) Пытаемся найти по order_id ИЛИ по subscription_id (полезно для PayPal: resource.id = subscription_id)
     if order_id:
         subscription = db.query(Subscription).filter(
-            (Subscription.order_id == order_id) |
-            (Subscription.subscription_id == order_id)
+            or_(
+                Subscription.order_id == str(order_id),
+                Subscription.subscription_id == str(order_id),
+            )
         ).first()
-        
+
+    # 2) Фоллбек: если не нашли, но дали telegram_id — берём самую свежую подписку пользователя
     if not subscription and telegram_id:
-        subscription = db.query(Subscription).filter_by(telegram_id=telegram_id).first()
+        subscription = db.query(Subscription).filter_by(telegram_id=telegram_id)\
+            .order_by(Subscription.created_at.desc()).first()
 
     if not subscription:
         return None
 
-    subscription.status = "active"  # Обязательно обновить статус
-    subscription.activated_at = subscription.activated_at or datetime.utcnow()
+    # Проставляем активный статус и даты
+    now = datetime.utcnow()
+    subscription.status = "active"
+    subscription.activated_at = subscription.activated_at or now
     subscription.expires_at = subscription.activated_at + timedelta(days=30)
-    subscription.has_group_access = True
-    subscription.group_joined_at = subscription.group_joined_at or datetime.utcnow()
 
+    # Доступ в группу даём ТОЛЬКО при active
+    subscription.has_group_access = True
+    subscription.group_joined_at = subscription.group_joined_at or now
+
+    # Обновляем сумму/валюту при наличии
     if amount is not None:
         subscription.amount = amount
     if currency is not None:
         subscription.currency = currency
 
+    # Связываем с user по telegram_id, если передан и надо
     if telegram_id:
         subscription.telegram_id = telegram_id
         user = db.query(User).filter_by(telegram_id=telegram_id).first()
@@ -170,7 +188,6 @@ def activate_subscription(db, order_id=None, telegram_id=None, amount=None, curr
     db.commit()
     db.refresh(subscription)
     return subscription
-
 
 # Отмена подписки
 def cancel_subscription(db, subscription_id: str):

@@ -29,7 +29,8 @@ class TelegramService:
                     if response.status == 200:
                         return await response.json()
                     else:
-                        logger.error(f"Error sending message: {response.status}")
+                        resp_text = await response.text()  # читаем тело ответа
+                        logger.error(f"Error sending message: {response.status} — {resp_text}")
                         return None
         except Exception as e:
             logger.error(f"Error in send_message: {str(e)}")
@@ -37,6 +38,16 @@ class TelegramService:
 
     async def send_payment_success_notification(self, telegram_id: int, subscription):
         try:
+            # Жёсткая защита: не шлём ссылку, если статус не active
+            if not subscription or getattr(subscription, "status", None) != "active":
+                logger.warning(f"Skip success notification: subscription not active "
+                               f"(id={getattr(subscription, 'id', None)}, status={getattr(subscription, 'status', None)})")
+                # Сообщение без ссылки (опционально)
+                await self.send_message(
+                    telegram_id,
+                    "✅ Оплата получена. Доступ будет выдан после подтверждения. Пожалуйста, дождитесь сообщения."
+                )
+                return
             text = (
                 "🎉 <b>Congratulazioni! Il pagamento è andato a buon fine!</b>\n\n"
                 f"Il tuo abbonamento è attivo fino al: {subscription.expires_at.strftime('%d.%m.%Y %H:%M')}\n"
@@ -68,6 +79,16 @@ class TelegramService:
 
     async def send_subscription_renewed_notification(self, telegram_id: int, subscription):
         try:
+            # Не отправляем ссылку, если почему-то статус не active
+            if not subscription or getattr(subscription, "status", None) != "active":
+                logger.warning(f"Skip renewed notification: subscription not active "
+                               f"(id={getattr(subscription, 'id', None)}, status={getattr(subscription, 'status', None)})")
+                await self.send_message(
+                    telegram_id,
+                    "✅ Оплата за продление получена. Доступ будет подтверждён после обработки. Пожалуйста, дождитесь сообщения."
+                )
+                return
+            
             text = (
                 "✅ <b>Abbonamento rinnovato con successo!</b>\n\n"
                 f"Il tuo abbonamento è stato esteso fino al: {subscription.expires_at.strftime('%d.%m.%Y %H:%M')}\n"

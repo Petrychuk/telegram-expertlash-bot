@@ -92,32 +92,40 @@ def paypal_webhook():
     data = request.get_json()
     PayPalService.verify_webhook(data)
     event_type = data.get('event_type')
-    resource = data.get('resource', {})
+    resource = data.get('resource', {}) or {}
     
     logger.info(f"PayPal webhook: {event_type}")
 
     db = next(get_db())
     try:
-        telegram_id = resource.get("custom_id")
-        subscription_id = resource.get("id")
-        
+        # PayPal присылает id подписки в resource.id (надежный ключ)
+        paypal_subscription_id = resource.get("id")
+        # telegram_id мы обычно передаём в custom_id при создании/оплате
+        raw_tid = resource.get("custom_id") or resource.get("custom")
+        try:
+            telegram_id = int(raw_tid) if raw_tid is not None else None
+        except (TypeError, ValueError):
+            telegram_id = None
+
         if event_type == "BILLING.SUBSCRIPTION.ACTIVATED":
-            logger.info(f"Подписка активирована: {telegram_id}")
-            subscription = activate_subscription(db, order_id=subscription_id, telegram_id=telegram_id)
-            
-            if subscription:              
+            sub = activate_subscription(db, order_id=paypal_subscription_id, telegram_id=telegram_id)
+
+            if sub and sub.status == "active":
                 run_async_in_thread(
-                    telegram_service.send_payment_success_notification(telegram_id, subscription)
+                    telegram_service.send_payment_success_notification(sub.telegram_id, sub)
                 )
+                logger.info(f"PayPal subscription activated: {sub.subscription_id or sub.order_id} for telegram_id={sub.telegram_id}")
             else:
-                logger.error(f"Подписка не найдена или не активирована для order_id={subscription_id}")
+                logger.error(f"Activation failed or not active for paypal_id={paypal_subscription_id}, tid={telegram_id}")
 
         elif event_type in ("BILLING.SUBSCRIPTION.CANCELLED", "BILLING.SUBSCRIPTION.EXPIRED"):
-            logger.info(f"Подписка отменена или истекла: {telegram_id}")
-            cancel_subscription(db, subscription_id=subscription_id)
+            logger.info(f"Подписка отменена/истекла: paypal_id={paypal_subscription_id}")
+            cancel_subscription(db, subscription_id=paypal_subscription_id)
 
         elif event_type == "BILLING.SUBSCRIPTION.PAYMENT.FAILED":
-            logger.warning(f"Проблема с оплатой подписки: {telegram_id}")
+            logger.warning(f"Проблема с оплатой подписки: paypal_id={paypal_subscription_id}")
+        # Остальные события логируем по необходимости
+
     finally:
         db.close()
 
@@ -236,7 +244,7 @@ def handle_paypal_payment_success(db, resource):
         return
 
     subscription = activate_subscription(db, subscription_id)
-    if subscription:
+    if subscription and subscription.status == "active":
         logger.info(f"Subscription activated: {subscription}")
         run_async_in_thread(
              telegram_service.send_payment_success_notification(telegram_id, subscription)
@@ -264,7 +272,7 @@ def handle_paypal_checkout_order_approved(db, resource):
         return
 
     subscription = activate_subscription(db, subscription_id)
-    if subscription:
+    if subscription and subscription.status == "active":
         run_async_in_thread(
             telegram_service.send_payment_success_notification(telegram_id, subscription)
         )
@@ -289,7 +297,7 @@ def handle_paypal_capture_completed(db, resource):
         return
 
     subscription = activate_subscription(db, order_id)
-    if subscription:
+    if subscription and subscription.status == "active":
         logger.info(f"PayPal subscription activated: {order_id} for telegram_id {telegram_id}")
         run_async_in_thread(
             telegram_service.send_payment_success_notification(telegram_id, subscription)
@@ -349,10 +357,20 @@ def stripe_cancel():
 
 @app.route('/paypal/return', methods=['GET'])
 def paypal_return():
+    # PayPal на return обычно кладёт token = id подписки (или order token)
     subscription_id = request.args.get('token')
     logger.info(f"PayPal return received: subscription_id={subscription_id}")
-    
-    return redirect(CLOSED_GROUP_LINK)
+
+    db = next(get_db())
+    try:
+        sub = get_subscription_by_id(db, subscription_id) or get_subscription_by_id(db, str(subscription_id))
+        if sub and sub.status == "active":
+            return redirect(CLOSED_GROUP_LINK)
+
+        # Если подписка не активна, НИКАКИХ ссылок
+        return "<h2>Оплата получена. Доступ будет выдан после подтверждения — проверьте сообщение в Telegram.</h2>", 200
+    finally:
+        db.close()
 
 @app.route('/paypal/cancel', methods=['GET'])
 def paypal_cancel():
