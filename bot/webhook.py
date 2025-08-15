@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 from functools import wraps
 
 from payment_config import STRIPE_WEBHOOK_SECRET, PAYPAL_WEBHOOK_ID, CLOSED_GROUP_LINK
-from payment_service import verify_stripe_webhook, verify_paypal_webhook, PayPalService
+from payment_service import verify_stripe_webhook, verify_paypal_webhook, PayPalService, StripeService
 from database import (
     get_db, get_subscription_by_id, activate_subscription,
     cancel_subscription, get_user_by_telegram_id
@@ -49,6 +49,7 @@ def run_async_in_thread(coro):
 def stripe_webhook():
     payload = request.get_data()
     sig_header = request.headers.get('stripe-signature')
+    event = StripeService.verify_webhook(payload, sig_header)
     try:
         event = verify_stripe_webhook(payload, sig_header)
         if not event:
@@ -89,6 +90,7 @@ def paypal_webhook():
         return jsonify({'error': 'Invalid signature'}), 400
     
     data = request.get_json()
+    PayPalService.verify_webhook(data)
     event_type = data.get('event_type')
     resource = data.get('resource', {})
     
@@ -356,26 +358,7 @@ def paypal_return():
 def paypal_cancel():
     return "<h2>❌ PayPal: Вы отменили оплату.</h2>", 200
 
-if __name__ == '__main__':
-    # app.run(host='0.0.0.0', port=5000, debug=True)
-    port = int(os.environ.get("PORT", 5000))
-    # debug оставляем только для локалки либо через FLASK_ENV
-    app.run(host='0.0.0.0', port=port)
-
-@app.route('/')
+@app.route("/")
 def index():
-    return "Bot is running!"
+    return "Bot and webhook are running!"
 
-if __name__ == '__main__':
-    flask_env = os.environ.get("FLASK_ENV", "production").lower()
-
-    if flask_env == "development":
-        # Локальная разработка
-        port = 5000
-        debug = True
-    else:
-        # Продакшен
-        port = 8080
-        debug = False
-
-    app.run(host='0.0.0.0', port=port, debug=debug)

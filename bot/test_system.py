@@ -82,7 +82,7 @@ def test_payment_services():
         
         # Тестируем создание заказа PayPal
         print("⚠️  Тестирование PayPal (ожидается ошибка с тестовыми ключами):")
-        paypal_result = PayPalService.create_subscription_order(123456789)
+        paypal_result = PayPalService.create_subscription(123456789)
         if not paypal_result['success']:
             print(f"⚠️  Ожидаемая ошибка PayPal: {paypal_result['error']}")
         
@@ -189,8 +189,8 @@ def check_file_structure():
         'database.py',
         'payment_service.py',
         'telegram_service.py',
-        'webhook_server.py',
-        'bot_updated.py'
+        'webhook.py',
+        'main.py'
     ]
     
     for file in required_files:

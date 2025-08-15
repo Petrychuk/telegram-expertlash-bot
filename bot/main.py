@@ -1,12 +1,10 @@
 import os
 import asyncio
 import logging
+import threading
 from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, types
-from aiogram.types import (
-    InlineKeyboardMarkup, InlineKeyboardButton,
-    ReplyKeyboardMarkup, KeyboardButton
-)
+from aiogram.types import ( InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton)
 from aiogram.utils import executor
 from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters.state import State, StatesGroup
@@ -22,10 +20,14 @@ from database import (
 from payment_service import StripeService, PayPalService
 from telegram_service import TelegramService, manage_group_access_loop
 
+from webhook import app
+
 # 1. Загрузка .env и инициализация
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 bot     = Bot(token=BOT_TOKEN, parse_mode="HTML")
+FLASK_ENV = os.getenv("FLASK_ENV", "dev")
+
 storage = MemoryStorage()
 dp      = Dispatcher(bot, storage=storage)
 
@@ -58,8 +60,7 @@ def get_main_reply_keyboard():
     return kb
 
 # 5. Функция для безопасной отправки видео
-async def send_video_or_placeholder(message, file_id, caption, placeholder_text):
-    
+async def send_video_or_placeholder(message, file_id, caption, placeholder_text):    
     if file_id and file_id.strip():
         try:
             await message.answer_video(file_id, caption=caption)
@@ -71,8 +72,7 @@ async def send_video_or_placeholder(message, file_id, caption, placeholder_text)
         await message.answer(f"🎬 {placeholder_text}\n\n<i>Il video non è temporaneamente disponibile</i>")  # 🎬 {placeholder_text}\n\n<i>Видео временно недоступно</i>
 
 # 6. Функция для работы с базой данных
-def get_or_create_user(telegram_id: int, username: str = None, first_name: str = None, last_name: str = None):
-    
+def get_or_create_user(telegram_id: int, username: str = None, first_name: str = None, last_name: str = None):    
     # Получение или создание пользователя
     db = next(get_db())
     try:
@@ -94,18 +94,16 @@ async def cmd_start(msg: types.Message, state: FSMContext):
         username=msg.from_user.username,
         first_name=msg.from_user.first_name,
         last_name=msg.from_user.last_name
-    )
-    
+    )    
     await Onboarding.format.set()
      
      # Устанавливаем Reply-кнопки отдельным сообщением с текстом
-    await msg.answer("💡 <i>Per una navigazione rapida, usa i pulsanti nel pannello in basso:</i>", reply_markup=get_main_reply_keyboard())
-    #  Для быстрой навигации используйте кнопки в нижней панели:
+    await msg.answer("💡 <i>Per una navigazione rapida, usa i pulsanti nel pannello in basso:</i>", reply_markup=get_main_reply_keyboard()) # Для быстрой навигации используйте кнопки в нижней панели:
     
     # Inline-кнопки для формата обучения
     format_kb = create_inline_keyboard([
-    ("📹 Video lezioni", "video"),        #  Видео-уроки
-    ("🎯 Webinar pratici", "webinar")     #  Практические вебинары
+    ("📹 Video lezioni", "video"),       #  Видео-уроки
+    ("🎯 Webinar pratici", "webinar")    #  Практические вебинары
     ], prefix="format", row_width=2)
     
     # Отправляем основное сообщение с Inline-кнопками
@@ -362,8 +360,7 @@ async def process_payment_method(c: types.CallbackQuery, state: FSMContext):
                 f"❌ Errore durante la creazione del pagamento: {result['error']}\n\n"
                 "Riprova oppure scegli un altro metodo di pagamento."
             )
-
-            
+           
     elif chosen_method == "paypal":
         # Создаем подписку PayPal
         result = PayPalService.create_subscription(c.from_user.id)
@@ -482,7 +479,6 @@ async def show_my_subscription(msg: types.Message, state: FSMContext):
             await Onboarding.payment_method.set()  # <- И здесь тоже!
     finally:
         db.close()
-
 # 19. Обработка любых других сообщений в процессе онбординга
 @dp.message_handler(state="*")
 async def handle_other_messages(msg: types.Message, state: FSMContext):
@@ -496,17 +492,25 @@ async def handle_other_messages(msg: types.Message, state: FSMContext):
         await msg.answer(
             "Per favore, scegli una delle opzioni proposte usando i pulsanti qui sotto 👇"  # Пожалуйста, выбери один из предложенных вариантов с помощью кнопок ниже 👇
         )
-
-if __name__ == "__main__":
-    executor.start_polling(dp, skip_updates=True)
-    
+# Задачи бота
 async def startup_tasks():
     asyncio.create_task(manage_group_access_loop())
 
-async def main():
+async def start_bot():
     await startup_tasks()
-    await dp.start_polling(bot)
+    await dp.start_polling()
+
+def run_bot_polling():
+    asyncio.run(start_bot())
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    asyncio.run(main())
+
+    if FLASK_ENV == "dev":
+        # Локальный режим — только бот
+        run_bot_polling()
+    else:
+        # Продакшен — Flask + бот в потоке
+        threading.Thread(target=run_bot_polling, daemon=True).start()
+        port = int(os.environ.get("PORT", 8080))
+        app.run(host="0.0.0.0", port=port)
