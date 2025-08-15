@@ -139,7 +139,11 @@ def create_subscription(db, telegram_id: int, payment_system: str, subscription_
 def activate_subscription(db, order_id=None, telegram_id=None, amount=None, currency=None):
     subscription = None
     if order_id:
-        subscription = db.query(Subscription).filter_by(order_id=order_id).first()
+        subscription = db.query(Subscription).filter(
+            (Subscription.order_id == order_id) |
+            (Subscription.subscription_id == order_id)
+        ).first()
+        
     if not subscription and telegram_id:
         subscription = db.query(Subscription).filter_by(telegram_id=telegram_id).first()
 
