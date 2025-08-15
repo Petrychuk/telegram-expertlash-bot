@@ -1,70 +1,116 @@
+import os
+import random
+import string
+from pprint import pprint
+
 from database import (
-    get_db, create_user, get_user_by_telegram_id, update_user_onboarding,
+    create_tables, get_db, create_user, get_user_by_telegram_id, update_user_onboarding,
     create_subscription, activate_subscription, cancel_subscription,
     get_active_subscription, get_subscription_by_id
 )
-from pprint import pprint
 
-# ⚙️ Получаем сессию базы данных
-database = next(get_db())
+def to_dict(model):
+    """Аккуратно сериализуем SQLAlchemy модель без служебного поля."""
+    if not model:
+        return None
+    d = {k: v for k, v in vars(model).items() if k != "_sa_instance_state"}
+    return d
 
-# 📌 1. Создание нового пользователя
-user = create_user(
-    database,
-    telegram_id=12345678,
-    username="nataliia",
-    first_name="Nataliia",
-    last_name="Petrychuk"
-)
-print("✅ Пользователь создан:")
-pprint(vars(user))
+def rand_suffix(n=4):
+    return "".join(random.choices(string.ascii_lowercase + string.digits, k=n))
 
-# 📌 2. Обновление данных онбординга
-user = update_user_onboarding(
-    database,
-    telegram_id=12345678,
-    format_choice="video",
-    level_choice="beginner",
-    time_choice="morning",
-    goal_choice="lashes"
-)
-print("✅ Онбординг обновлен:")
-pprint(vars(user))
+def main():
+    print("🚀 Тест БД — полный цикл\n")
 
-# 📌 3. Создание подписки
-subscription = create_subscription(
-    database,
-    telegram_id=12345678,
-    payment_system="paypal",
-    subscription_id="sub_001",
-    amount=29.99,
-    customer_id="cust_001"
-)
-print("✅ Подписка создана:")
-pprint(vars(subscription))
+    # 0) Создаём таблицы
+    create_tables()
 
-# 📌 4. Активация подписки
-subscription = activate_subscription(database, "sub_001")
-print("✅ Подписка активирована:")
-pprint(vars(subscription))
+    # 1) Получаем сессию
+    db = next(get_db())
 
-# 📌 5. Получение активной подписки по Telegram ID
-active_sub = get_active_subscription(database, 12345678)
-print("📦 Активная подписка:")
-pprint(vars(active_sub) if active_sub else "Нет активной подписки")
+    # 2) Готовим уникальные тестовые данные
+    suffix = rand_suffix()
+    tg_id = int("12345678")  # сам telegram_id может повторяться (у нас теперь нет unique на subscriptions)
+    sub_id = f"sub_{suffix}"
+    cust_id = f"cust_{suffix}"
+    print(f"🧪 Используемые ID: telegram_id={tg_id}, subscription_id={sub_id}\n")
 
-# 📌 6. Отмена подписки
-cancelled = cancel_subscription(database, "sub_001")
-print("🚫 Подписка отменена:")
-pprint(vars(cancelled))
+    try:
+        # 3) Пользователь: создать или достать
+        user = get_user_by_telegram_id(db, tg_id)
+        if not user:
+            user = create_user(
+                db,
+                telegram_id=tg_id,
+                username=f"nataliia_{suffix}",
+                first_name="Nataliia",
+                last_name="Petrychuk"
+            )
+            print("✅ Пользователь создан:")
+        else:
+            print("ℹ️  Пользователь уже существует, используем существующего:")
+        pprint(to_dict(user)); print()
 
-# 📌 7. Получение пользователя по Telegram ID
-user = get_user_by_telegram_id(database, 12345678)
-print("👤 Полученный пользователь:")
-pprint(vars(user))
+        # 4) Онбординг
+        user = update_user_onboarding(
+            db,
+            telegram_id=tg_id,
+            format_choice="video",
+            level_choice="beginner",
+            time_choice="morning",
+            goal_choice="lashes"
+        )
+        print("✅ Онбординг обновлён:")
+        pprint(to_dict(user)); print()
 
-# 📌 8. Получение подписки по ID
-sub = get_subscription_by_id(database, "sub_001")
-print("🔍 Подписка по ID:")
-pprint(vars(sub) if sub else "Не найдена")
+        # 5) Создание подписки (pending)
+        subscription = create_subscription(
+            db,
+            telegram_id=tg_id,
+            payment_system="paypal",  # или "stripe"
+            subscription_id=sub_id,   # в Stripe на этапе checkout это был бы session_id
+            amount=29.99,
+            customer_id=cust_id
+        )
+        print("✅ Подписка создана (pending):")
+        pprint(to_dict(subscription)); print()
 
+        # 6) Активация подписки
+        subscription = activate_subscription(db, sub_id)
+        print("✅ Подписка активирована:")
+        pprint(to_dict(subscription)); print()
+
+        # 7) Получение активной подписки по Telegram ID
+        active_sub = get_active_subscription(db, tg_id)
+        print("📦 Активная подписка:")
+        pprint(to_dict(active_sub) or "Нет активной подписки"); print()
+
+        # 8) Отмена подписки
+        cancelled = cancel_subscription(db, sub_id)
+        print("🚫 Подписка отменена:")
+        pprint(to_dict(cancelled)); print()
+
+        # 9) Получение пользователя по Telegram ID (ещё раз)
+        user = get_user_by_telegram_id(db, tg_id)
+        print("👤 Полученный пользователь:")
+        pprint(to_dict(user)); print()
+
+        # 10) Получение подписки по ID
+        sub = get_subscription_by_id(db, sub_id)
+        print("🔍 Подписка по ID:")
+        pprint(to_dict(sub) if sub else "Не найдена"); print()
+
+        print("🎉 Тест пройден без ошибок")
+
+    except Exception as e:
+        print(f"❌ Ошибка в тесте: {e}")
+        raise
+    finally:
+        # 11) Закрываем сессию
+        try:
+            db.close()
+        except Exception:
+            pass
+
+if __name__ == "__main__":
+    main()

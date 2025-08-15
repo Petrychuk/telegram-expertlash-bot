@@ -1,3 +1,4 @@
+# telegram_service.py
 import asyncio
 import aiohttp
 from datetime import datetime, timedelta
@@ -8,46 +9,51 @@ from payment_config import CLOSED_GROUP_LINK
 import logging
 
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO)
 
 class TelegramService:
     def __init__(self):
         self.bot_token = BOT_TOKEN
         self.api_url = f"https://api.telegram.org/bot{self.bot_token}"
 
-    async def send_message(self, chat_id: int, text: str, reply_markup=None, parse_mode="HTML"):
+    # ---- low-level helper ----
+    async def _post(self, method: str, json: dict):
         try:
             async with aiohttp.ClientSession() as session:
-                data = {
-                    'chat_id': chat_id,
-                    'text': text,
-                    'parse_mode': parse_mode
-                }
-                if reply_markup:
-                    data['reply_markup'] = reply_markup
-                async with session.post(f"{self.api_url}/sendMessage", json=data) as response:
-                    if response.status == 200:
-                        return await response.json()
-                    else:
-                        resp_text = await response.text()  # читаем тело ответа
-                        logger.error(f"Error sending message: {response.status} — {resp_text}")
-                        return None
+                async with session.post(f"{self.api_url}/{method}", json=json) as resp:
+                    if resp.status == 200:
+                        return await resp.json()
+                    text = await resp.text()
+                    logger.error(f"Telegram API error [{method}]: {resp.status} — {text}")
+                    return None
         except Exception as e:
-            logger.error(f"Error in send_message: {str(e)}")
+            logger.error(f"Telegram API exception [{method}]: {e}")
             return None
+
+    # ---- messaging ----
+    async def send_message(self, chat_id: int, text: str, reply_markup=None, parse_mode="HTML"):
+        payload = {
+            "chat_id": chat_id,
+            "text": text,
+            "parse_mode": parse_mode
+        }
+        if reply_markup:
+            payload["reply_markup"] = reply_markup
+        return await self._post("sendMessage", payload)
 
     async def send_payment_success_notification(self, telegram_id: int, subscription):
         try:
-            # Жёсткая защита: не шлём ссылку, если статус не active
+            # Не отправляем ссылку, если подписка не активна
             if not subscription or getattr(subscription, "status", None) != "active":
-                logger.warning(f"Skip success notification: subscription not active "
-                               f"(id={getattr(subscription, 'id', None)}, status={getattr(subscription, 'status', None)})")
-                # Сообщение без ссылки (опционально)
+                logger.warning(
+                    "Skip success notification: subscription not active "
+                    f"(id={getattr(subscription, 'id', None)}, status={getattr(subscription, 'status', None)})"
+                )
                 await self.send_message(
                     telegram_id,
                     "✅ Оплата получена. Доступ будет выдан после подтверждения. Пожалуйста, дождитесь сообщения."
                 )
                 return
+
             text = (
                 "🎉 <b>Congratulazioni! Il pagamento è andato a buon fine!</b>\n\n"
                 f"Il tuo abbonamento è attivo fino al: {subscription.expires_at.strftime('%d.%m.%Y %H:%M')}\n"
@@ -56,15 +62,12 @@ class TelegramService:
             )
             reply_markup = {
                 "inline_keyboard": [[
-                    {
-                        "text": "➡️ Accedi al gruppo chiuso Expert Lash",
-                        "url": CLOSED_GROUP_LINK
-                    }
+                    {"text": "➡️ Accedi al gruppo chiuso Expert Lash", "url": CLOSED_GROUP_LINK}
                 ]]
             }
             await self.send_message(telegram_id, text, reply_markup)
         except Exception as e:
-            logger.error(f"Error sending payment success notification: {str(e)}")
+            logger.error(f"Error sending payment success notification: {e}")
 
     async def send_subscription_cancelled_notification(self, telegram_id: int):
         try:
@@ -75,20 +78,21 @@ class TelegramService:
             )
             await self.send_message(telegram_id, text)
         except Exception as e:
-            logger.error(f"Error sending subscription cancelled notification: {str(e)}")
+            logger.error(f"Error sending subscription cancelled notification: {e}")
 
     async def send_subscription_renewed_notification(self, telegram_id: int, subscription):
         try:
-            # Не отправляем ссылку, если почему-то статус не active
             if not subscription or getattr(subscription, "status", None) != "active":
-                logger.warning(f"Skip renewed notification: subscription not active "
-                               f"(id={getattr(subscription, 'id', None)}, status={getattr(subscription, 'status', None)})")
+                logger.warning(
+                    "Skip renewed notification: subscription not active "
+                    f"(id={getattr(subscription, 'id', None)}, status={getattr(subscription, 'status', None)})"
+                )
                 await self.send_message(
                     telegram_id,
                     "✅ Оплата за продление получена. Доступ будет подтверждён после обработки. Пожалуйста, дождитесь сообщения."
                 )
                 return
-            
+
             text = (
                 "✅ <b>Abbonamento rinnovato con successo!</b>\n\n"
                 f"Il tuo abbonamento è stato esteso fino al: {subscription.expires_at.strftime('%d.%m.%Y %H:%M')}\n"
@@ -97,15 +101,12 @@ class TelegramService:
             )
             reply_markup = {
                 "inline_keyboard": [[
-                    {
-                        "text": "➡️ Accedi al gruppo chiuso Expert Lash",
-                        "url": CLOSED_GROUP_LINK
-                    }
+                    {"text": "➡️ Accedi al gruppo chiuso Expert Lash", "url": CLOSED_GROUP_LINK}
                 ]]
             }
             await self.send_message(telegram_id, text, reply_markup)
         except Exception as e:
-            logger.error(f"Error sending subscription renewed notification: {str(e)}")
+            logger.error(f"Error sending subscription renewed notification: {e}")
 
     async def send_payment_failed_notification(self, telegram_id: int):
         try:
@@ -117,71 +118,33 @@ class TelegramService:
             )
             reply_markup = {
                 "inline_keyboard": [
-                    [{
-                        "text": "💳 Aggiorna il metodo di pagamento",
-                        "callback_data": "update_payment_method"
-                    }],
-                    [{
-                        "text": "📞 Contatta il supporto",
-                        "url": "https://t.me/liudmylazhyltsova"
-                    }]
+                    [{"text": "💳 Aggiorna il metodo di pagamento", "callback_data": "update_payment_method"}],
+                    [{"text": "📞 Contatta il supporto", "url": "https://t.me/liudmylazhyltsova"}]
                 ]
             }
             await self.send_message(telegram_id, text, reply_markup)
         except Exception as e:
-            logger.error(f"Error sending payment failed notification: {str(e)}")
+            logger.error(f"Error sending payment failed notification: {e}")
 
+    # ---- membership helpers (опционально, если используешь управление в группе) ----
     async def get_chat_member(self, chat_id: str, user_id: int):
-        try:
-            async with aiohttp.ClientSession() as session:
-                data = {
-                    'chat_id': chat_id,
-                    'user_id': user_id
-                }
-                async with session.post(f"{self.api_url}/getChatMember", json=data) as response:
-                    if response.status == 200:
-                        return await response.json()
-                    else:
-                        logger.error(f"Error getting chat member: {response.status}")
-                        return None
-        except Exception as e:
-            logger.error(f"Error in get_chat_member: {str(e)}")
-            return None
+        payload = {"chat_id": chat_id, "user_id": user_id}
+        return await self._post("getChatMember", payload)
 
-    async def kick_chat_member(self, chat_id: str, user_id: int):
-        try:
-            async with aiohttp.ClientSession() as session:
-                data = {
-                    'chat_id': chat_id,
-                    'user_id': user_id
-                }
-                async with session.post(f"{self.api_url}/kickChatMember", json=data) as response:
-                    if response.status == 200:
-                        return await response.json()
-                    else:
-                        logger.error(f"Error kicking chat member: {response.status}")
-                        return None
-        except Exception as e:
-            logger.error(f"Error in kick_chat_member: {str(e)}")
-            return None
+    async def ban_chat_member(self, chat_id: str, user_id: int):
+        """
+        Современная замена kickChatMember. Блокирует пользователя в чате.
+        """
+        payload = {"chat_id": chat_id, "user_id": user_id}
+        res = await self._post("banChatMember", payload)
+        if not res:
+            # фолбэк на старый метод, если вдруг прокси/APIs старые
+            res = await self._post("kickChatMember", payload)
+        return res
 
     async def unban_chat_member(self, chat_id: str, user_id: int):
-        try:
-            async with aiohttp.ClientSession() as session:
-                data = {
-                    'chat_id': chat_id,
-                    'user_id': user_id,
-                    'only_if_banned': True
-                }
-                async with session.post(f"{self.api_url}/unbanChatMember", json=data) as response:
-                    if response.status == 200:
-                        return await response.json()
-                    else:
-                        logger.error(f"Error unbanning chat member: {response.status}")
-                        return None
-        except Exception as e:
-            logger.error(f"Error in unban_chat_member: {str(e)}")
-            return None
+        payload = {"chat_id": chat_id, "user_id": user_id, "only_if_banned": True}
+        return await self._post("unbanChatMember", payload)
 
     async def send_subscription_expiry_warning(self, telegram_id: int, days_left: int):
         try:
@@ -192,20 +155,16 @@ class TelegramService:
             )
             reply_markup = {
                 "inline_keyboard": [
-                    [{
-                        "text": "💳 Aggiorna il metodo di pagamento",
-                        "callback_data": "update_payment_method"
-                    }],
-                    [{
-                        "text": "📞 Contatta il supporto",
-                        "url": "https://t.me/liudmylazhyltsova"
-                    }]
+                    [{"text": "💳 Aggiorna il metodo di pagamento", "callback_data": "update_payment_method"}],
+                    [{"text": "📞 Contatta il supporto", "url": "https://t.me/liudmylazhyltsova"}]
                 ]
             }
             await self.send_message(telegram_id, text, reply_markup)
         except Exception as e:
-            logger.error(f"Error sending subscription expiry warning: {str(e)}")
+            logger.error(f"Error sending subscription expiry warning: {e}")
 
+
+# ---- periodics ----
 async def manage_group_access():
     telegram_service = TelegramService()
     db = None
@@ -228,7 +187,7 @@ async def manage_group_access():
         db.commit()
         logger.info(f"Processed {len(expired_subs)} expired subscriptions")
     except Exception as e:
-        logger.error(f"Error in manage_group_access: {str(e)}")
+        logger.error(f"Error in manage_group_access: {e}")
         if db:
             db.rollback()
     finally:
@@ -241,9 +200,6 @@ async def manage_group_access_loop(interval_seconds=3600):
         await asyncio.sleep(interval_seconds)
 
 async def send_expiry_warnings():
-    from database import SessionLocal, Subscription
-    from sqlalchemy import and_
-
     telegram_service = TelegramService()
     db = None
     try:
@@ -259,12 +215,12 @@ async def send_expiry_warnings():
         ).all()
 
         for sub in subs_to_warn:
-            days_left = (sub.expires_at - datetime.utcnow()).days
+            days_left = max(0, (sub.expires_at - datetime.utcnow()).days)
             await telegram_service.send_subscription_expiry_warning(sub.telegram_id, days_left)
 
         logger.info(f"Sent expiry warnings to {len(subs_to_warn)} users")
     except Exception as e:
-        logger.error(f"Error in send_expiry_warnings: {str(e)}")
+        logger.error(f"Error in send_expiry_warnings: {e}")
     finally:
         if db:
             db.close()

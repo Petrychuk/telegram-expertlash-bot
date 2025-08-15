@@ -1,6 +1,5 @@
 import os
 
-
 # --- НАСТРОЙКИ БОТА ---
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
