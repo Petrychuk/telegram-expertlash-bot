@@ -1,5 +1,5 @@
 import os
-
+import stripe
 from flask import Flask, request, jsonify, redirect
 from flask_cors import CORS
 import threading
@@ -162,6 +162,7 @@ def handle_stripe_payment_success(db, session):
 
     # 3) активируем
     activated = activate_subscription(db, real_sub_id, telegram_id=telegram_id)
+    
     if activated and activated.status == "active":
         logger.info(f"Stripe subscription activated: {real_sub_id} (user {activated.telegram_id})")
         run_async_in_thread(
@@ -173,24 +174,46 @@ def handle_stripe_payment_success(db, session):
 @with_db_session
 def handle_stripe_payment_succeeded(db, invoice):
     """
-    invoice.payment_succeeded — продление/первичная активация на всякий случай
+    invoice.payment_succeeded
+    - При первом платеже подписка уже активируется в checkout.session.completed.
+      Этот хендлер важен для продлений.
+    - Иногда Stripe шлёт invoice без поля 'subscription' → добираем через expand.
     """
-    subscription_id = invoice.get('subscription')
-    if not subscription_id:
-        logger.warning("No subscription ID in invoice")
-        return
+    try:
+        sub_id = invoice.get('subscription')
 
-    sub = get_subscription_by_id(db, subscription_id)
-    if sub:
+        if not sub_id:
+            inv_id = invoice.get('id')
+            if not inv_id:
+                logger.info("invoice.payment_succeeded без id и subscription (пропускаем)")
+                return
+
+            # добираем полный инвойс вместе с подпиской
+            inv = stripe.Invoice.retrieve(inv_id, expand=['subscription'])
+            if getattr(inv, 'subscription', None):
+                sub_id = inv.subscription.id
+
+        if not sub_id:
+            logger.info("invoice.payment_succeeded без subscription id (пропускаем)")
+            return
+
+        sub = get_subscription_by_id(db, sub_id)
+        if not sub:
+            logger.error(f"Subscription not found for id: {sub_id}")
+            return
+
+        # продлеваем на 30 дней; статус и доступ – на всякий случай
         sub.expires_at = datetime.utcnow() + timedelta(days=30)
         sub.status = "active"
         sub.has_group_access = True
-        logger.info(f"Subscription {subscription_id} extended/activated to {sub.expires_at}")
+
+        logger.info(f"Subscription {sub_id} extended/activated via invoice")
         run_async_in_thread(
             telegram_service.send_subscription_renewed_notification(sub.telegram_id, sub)
         )
-    else:
-        logger.error(f"Subscription not found for id: {subscription_id}")
+
+    except Exception as e:
+        logger.exception(f"handle_stripe_payment_succeeded error: {e}")
 
 @with_db_session
 def handle_stripe_subscription_created(db, subscription):
