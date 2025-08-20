@@ -1,4 +1,3 @@
-# telegram_service.py
 import asyncio
 import aiohttp
 from datetime import datetime, timedelta
@@ -162,7 +161,54 @@ class TelegramService:
             await self.send_message(telegram_id, text, reply_markup)
         except Exception as e:
             logger.error(f"Error sending subscription expiry warning: {e}")
+    
+    # отправка видео по незакончиной оплатой и напоминалка
+    async def send_video(self, chat_id: int, file_id: str, caption: str,
+                         reply_markup=None, parse_mode="HTML"):
+        try:
+            async with aiohttp.ClientSession() as session:
+                data = {
+                    "chat_id": chat_id,
+                    "video": file_id,     # file_id из Telegram
+                    "caption": caption,
+                    "parse_mode": parse_mode
+                }
+                if reply_markup:
+                    data["reply_markup"] = reply_markup
+                async with session.post(f"{self.api_url}/sendVideo", json=data) as resp:
+                    if resp.status == 200:
+                        return await resp.json()
+                    else:
+                        txt = await resp.text()
+                        logger.error(f"Error send_video: {resp.status} — {txt}")
+                        return None
+        except Exception as e:
+            logger.error(f"Error in send_video: {str(e)}")
+            return None
+    
+    async def send_subscription_expired_goodbye(self, telegram_id: int, stripe_url: str | None = None, paypal_url: str | None = None):
+        """
+        Сообщение после авто-деактивации (подписка истекла).
+        Даём быстрые кнопки для возврата: Stripe/PayPal, начать заново, поддержка.
+        """
+        text = (
+            "🙏 <b>Grazie per essere stata con noi!</b>\n\n"
+            "La tua sottoscrizione è scaduta e l’accesso al gruppo è stato revocato.\n"
+            "Puoi tornare quando vuoi — usa i pulsanti qui sotto per rinnovare o ricominciare.\n"
+        )
 
+        buttons = []
+        if stripe_url:
+            buttons.append([{"text": "🔁 Riattiva con Stripe", "url": stripe_url}])
+        if paypal_url:
+            buttons.append([{"text": "🅿️ Riattiva con PayPal", "url": paypal_url}])
+
+        # базовые действия — всегда показываем
+        buttons.append([{"text": "🔄 Ricomincia da capo", "callback_data": "restart_onboarding"}])
+        buttons.append([{"text": "📞 Supporto", "url": "https://t.me/liudmylazhyltsova"}])
+
+        reply_markup = {"inline_keyboard": buttons}
+        await self.send_message(telegram_id, text, reply_markup)
 
 # ---- periodics ----
 async def manage_group_access():
