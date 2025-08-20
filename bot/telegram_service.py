@@ -1,9 +1,10 @@
+import os
 import asyncio
 import aiohttp
 from datetime import datetime, timedelta
 from database import SessionLocal, Subscription
 from sqlalchemy import and_
-from config import BOT_TOKEN
+from config import BOT_TOKEN as CONF_BOT_TOKEN
 from payment_config import CLOSED_GROUP_LINK
 import logging
 
@@ -11,7 +12,9 @@ logger = logging.getLogger(__name__)
 
 class TelegramService:
     def __init__(self):
-        self.bot_token = BOT_TOKEN
+        self.bot_token = os.getenv("BOT_TOKEN", CONF_BOT_TOKEN)
+        if not self.bot_token:
+            raise RuntimeError("BOT_TOKEN not set")
         self.api_url = f"https://api.telegram.org/bot{self.bot_token}"
 
     # ---- low-level helper ----

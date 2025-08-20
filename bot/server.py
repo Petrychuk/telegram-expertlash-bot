@@ -8,8 +8,10 @@ from main import run_bot_polling        # запуск aiogram
 from tasks import run_all_jobs          
 
 logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
 
 def _start_bot():
+    logger.info("Starting bot thread…")
     threading.Thread(target=run_bot_polling, daemon=True).start()
 
 def _start_scheduler():

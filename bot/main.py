@@ -2,14 +2,16 @@ import os
 import asyncio
 import logging
 import threading
+import sys
 from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import (InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton)
 from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters.state import State, StatesGroup
+from aiogram.contrib.middlewares.logging import LoggingMiddleware
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
 
-from config import BOT_TOKEN as CONF_BOT_TOKEN, VIDEO_PRESENTATION_FILE_ID, VIDEO_REVIEWS
+from config import BOT_TOKEN as CONF_BOT_TOKEN, VIDEO_PRESENTATION_FILE_ID, VIDEO_REVIEWS, ADMIN_IDS
 from payment_config import SUBSCRIPTION_PRICE, CLOSED_GROUP_LINK
 from database import (
     create_tables, get_db, get_user_by_telegram_id, create_user,
@@ -457,14 +459,46 @@ async def handle_other_messages(msg: types.Message, state: FSMContext):
 # Задачи бота
 async def startup_tasks():
     asyncio.create_task(manage_group_access_loop())
+    # ПИНГ админам
+    try:
+        admins = []
+        if isinstance(ADMIN_IDS, (list, tuple)):
+            admins = ADMIN_IDS
+        elif isinstance(ADMIN_IDS, str):
+            admins = [x.strip() for x in ADMIN_IDS.split(",") if x.strip().isdigit()]
+        for admin_id in admins:
+            try:
+                await bot.send_message(int(admin_id), "🤖 Bot started: polling is up")
+            except Exception as e:
+                logging.warning(f"Failed to notify admin {admin_id}: {e}")
+    except Exception as e:
+        logging.warning(f"startup notify failed: {e}")
+
+if sys.platform.startswith("win"):
+    try:
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    except Exception:
+        pass
 
 async def start_bot():
     await startup_tasks()
     try:
+        logging.info("Deleting webhook (drop_pending_updates=True)…")
         await bot.delete_webhook(drop_pending_updates=True)
-    except Exception as e:
-        logging.exception(f"delete_webhook failed: {e}")
-    await dp.start_polling()
+        logging.info("Webhook deleted. Starting polling…")
+    except Exception:
+        logging.exception("delete_webhook failed")
+
+    try:
+        await dp.start_polling()
+    except Exception:
+        logging.exception("Polling crashed with exception")
+        raise
+    finally:
+        try:
+            await bot.session.close()
+        except Exception:
+            pass
     
 def run_bot_polling():
     logging.info("Launching polling…")

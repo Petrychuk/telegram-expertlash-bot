@@ -232,6 +232,7 @@ async def deactivate_expired_subscriptions():
 # =========================
 # Объединённый запуск
 # =========================
+
 async def run_all_jobs():
     start = datetime.utcnow()
     nudged = await nudge_pending_subscriptions()
