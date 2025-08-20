@@ -1,10 +1,8 @@
-# database.py
 import os
 from datetime import datetime, timedelta
-
 from sqlalchemy import (
     create_engine, Column, Integer, String, Float,
-    Boolean, DateTime, BigInteger, or_
+    Boolean, DateTime, BigInteger, or_, text
 )
 from sqlalchemy.orm import sessionmaker, declarative_base
 from dotenv import load_dotenv
@@ -30,9 +28,8 @@ engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
-
 # ------------------------
-# Модель пользователя
+# Model users
 # ------------------------
 class User(Base):
     __tablename__ = "users"
@@ -50,21 +47,20 @@ class User(Base):
     time_choice = Column(String, nullable=True)
     goal_choice = Column(String, nullable=True)
 
-
 # ------------------------
-# Модель подписки
+# Model subscription
 # ------------------------
 class Subscription(Base):
     __tablename__ = "subscriptions"
 
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, index=True)  # связь с User.id (FK опционален)
-    telegram_id = Column(BigInteger, index=True, nullable=False)  # ВАЖНО: без unique!
+    user_id = Column(Integer, index=True) 
+    telegram_id = Column(BigInteger, index=True, nullable=False) 
 
     # Платежная система
     payment_system = Column(String)                     # "paypal" или "stripe"
-    subscription_id = Column(String, unique=True, index=True)  # ID подписки в платёжной системе (sub_... / PP id)
-    customer_id = Column(String, nullable=True)         # ID клиента (Stripe Customer, PayPal Payer при необходимости)
+    subscription_id = Column(String, unique=True, index=True)  
+    customer_id = Column(String, nullable=True)         # ID клиента (Stripe Customer, PayPal Payer)
 
     # Доп. идентификатор заказа/сессии
     order_id = Column(String, unique=True, index=True, nullable=True)
@@ -83,12 +79,15 @@ class Subscription(Base):
     # Доступ к группе
     has_group_access = Column(Boolean, default=False)
     group_joined_at = Column(DateTime, nullable=True)
-
+    
+    # анти-спам и напоминания
+    last_nudge_at   = Column(DateTime, nullable=True)   # когда последний раз пинали pending
+    nudges_count    = Column(Integer, default=0)        # сколько раз пинали pending
+    last_warned_at  = Column(DateTime, nullable=True)   # когда последний раз предупреждали активную о скором окончании
 
 # Создание таблиц
 def create_tables():
     Base.metadata.create_all(bind=engine)
-
 
 # Получение сессии
 def get_db():
@@ -98,13 +97,11 @@ def get_db():
     finally:
         db.close()
 
-
 # ------------------------
-# Пользователи
+# Users
 # ------------------------
 def get_user_by_telegram_id(db, telegram_id: int):
     return db.query(User).filter(User.telegram_id == telegram_id).first()
-
 
 def create_user(db, telegram_id: int, username: str = None, first_name: str = None, last_name: str = None):
     user = User(
@@ -118,7 +115,6 @@ def create_user(db, telegram_id: int, username: str = None, first_name: str = No
     db.refresh(user)
     return user
 
-
 def update_user_onboarding(db, telegram_id: int, format_choice: str, level_choice: str, time_choice: str, goal_choice: str):
     user = get_user_by_telegram_id(db, telegram_id)
     if user:
@@ -130,9 +126,8 @@ def update_user_onboarding(db, telegram_id: int, format_choice: str, level_choic
         db.refresh(user)
     return user
 
-
 # ------------------------
-# Подписки
+# subscriptio
 # ------------------------
 def create_subscription(db, telegram_id: int, payment_system: str, subscription_id: str, amount: float, customer_id: str = None):
     """
