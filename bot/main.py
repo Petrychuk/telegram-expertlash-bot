@@ -460,9 +460,14 @@ async def startup_tasks():
 
 async def start_bot():
     await startup_tasks()
+    try:
+        await bot.delete_webhook(drop_pending_updates=True)
+    except Exception as e:
+        logging.exception(f"delete_webhook failed: {e}")
     await dp.start_polling()
-
+    
 def run_bot_polling():
+    logging.info("Launching polling…")
     asyncio.run(start_bot())
 
 if __name__ == "__main__":

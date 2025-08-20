@@ -1,13 +1,11 @@
-# server.py
 import os
 import time
 import threading
 import logging
 import asyncio
-
 from webhook import app                 # Flask-приложение
 from main import run_bot_polling        # запуск aiogram
-from tasks import run_all_jobs          # <-- наши крон‑джобы
+from tasks import run_all_jobs          
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +37,6 @@ def _start_scheduler():
             time.sleep(interval_min * 60)
 
     threading.Thread(target=loop, daemon=True).start()
-
 # поднимаем всё
 _start_bot()
 _start_scheduler()
