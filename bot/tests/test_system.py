@@ -38,9 +38,7 @@ def test_database_setup():
     except Exception as e:
         print(f"❌ Ошибка при тестировании БД: {str(e)}")
         return False
-
     return True
-
 
 def test_payment_config():
     """Тестирование конфигурации платежных систем"""
@@ -64,7 +62,6 @@ def test_payment_config():
         return False
 
     return True
-
 
 def test_payment_services():
     """Тестирование сервисов платежных систем"""
@@ -94,9 +91,7 @@ def test_payment_services():
     except Exception as e:
         print(f"❌ Ошибка при тестировании сервисов: {str(e)}")
         return False
-
     return True
-
 
 def test_subscription_workflow():
     """Тестирование полного workflow подписки"""
@@ -153,7 +148,6 @@ def test_subscription_workflow():
 
     return True
 
-
 def test_telegram_service():
     """Тестирование Telegram сервиса"""
     print("\n🔍 Тестирование Telegram сервиса...")
@@ -173,7 +167,6 @@ def test_telegram_service():
         return False
 
     return True
-
 
 def test_webhook_server():
     """Тестирование webhook сервера"""
@@ -202,7 +195,6 @@ def test_webhook_server():
 
     return True
 
-
 def check_file_structure():
     """Проверка структуры файлов"""
     print("\n🔍 Проверка структуры файлов...")
@@ -214,9 +206,10 @@ def check_file_structure():
         'payment_service.py',
         'telegram_service.py',
         'webhook.py',
-        'main.py'
+        'main.py', 
+        'auth_telegram.py',
+        'set_group_menu.py'
     ]
-
     ok = True
     for file in required_files:
         if os.path.exists(file):
@@ -226,7 +219,6 @@ def check_file_structure():
             ok = False
 
     return ok
-
 
 def main():
     """Основная функция тестирования"""
@@ -271,7 +263,6 @@ def main():
         print("⚠️  Некоторые тесты не пройдены. Проверьте конфигурацию.")
 
     return passed == total
-
 
 if __name__ == "__main__":
     success = main()

@@ -9,7 +9,6 @@ from payment_service import StripeService, PayPalService
 from config import VIDEO_PENDING_FILE_ID
 
 # ---------- ЛОГИ ----------
-
 logging.basicConfig(
     filename="subscription_checker.log",
     level=logging.INFO,
@@ -185,7 +184,6 @@ async def deactivate_expired_subscriptions():
         if not expired:
             logging.info("Нет просроченных подписок.")
             return
-
         # 1) меняем статус и закрываем доступ
         for sub in expired:
             logging.info(f"Деактивация подписки ID {sub.id} (user {sub.telegram_id})")
@@ -232,7 +230,6 @@ async def deactivate_expired_subscriptions():
 # =========================
 # Объединённый запуск
 # =========================
-
 async def run_all_jobs():
     start = datetime.utcnow()
     nudged = await nudge_pending_subscriptions()

@@ -1,6 +1,7 @@
 import os
 import stripe
 from flask import Flask, request, jsonify, redirect
+from auth_telegram import bp as tg_bp
 from flask_cors import CORS
 import threading
 import asyncio
@@ -18,6 +19,11 @@ from telegram_service import TelegramService
 
 app = Flask(__name__)
 CORS(app)
+app.config["BOT_TOKEN"]   = os.getenv("BOT_TOKEN")   
+app.config["JWT_SECRET"]  = os.getenv("JWT_SECRET", "devsecret")
+
+# регистрируем blueprint
+app.register_blueprint(tg_bp)
 telegram_service = TelegramService()
 
 logging.basicConfig(level=logging.INFO)
@@ -174,10 +180,7 @@ def handle_stripe_payment_success(db, session):
 @with_db_session
 def handle_stripe_payment_succeeded(db, invoice):
     """
-    invoice.payment_succeeded
-    - При первом платеже подписка уже активируется в checkout.session.completed.
-      Этот хендлер важен для продлений.
-    - Иногда Stripe шлёт invoice без поля 'subscription' → добираем через expand.
+    invoice.payment_succeeded- При первом платеже подписка уже активируется в checkout.session.completed.Этот хендлер важен для продлений.
     """
     try:
         sub_id = invoice.get('subscription')

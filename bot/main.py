@@ -5,23 +5,23 @@ import threading
 import sys
 from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, types
-from aiogram.types import (InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton)
+from aiogram.types import (
+    InlineKeyboardMarkup, InlineKeyboardButton,
+    ReplyKeyboardMarkup, KeyboardButton, WebAppInfo  
+)
 from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters.state import State, StatesGroup
 from aiogram.contrib.middlewares.logging import LoggingMiddleware
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
-
 from config import BOT_TOKEN as CONF_BOT_TOKEN, VIDEO_PRESENTATION_FILE_ID, VIDEO_REVIEWS, ADMIN_IDS
 from payment_config import SUBSCRIPTION_PRICE, CLOSED_GROUP_LINK
 from database import (
     create_tables, get_db, get_user_by_telegram_id, create_user,
     update_user_onboarding, create_subscription, get_active_subscription
 )
-
 from payment_service import StripeService, PayPalService
 from telegram_service import TelegramService, manage_group_access_loop
 from webhook import app
-
 # 1. Загрузка .env и инициализация
 load_dotenv()
 ENV_BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -37,6 +37,7 @@ dp = Dispatcher(bot, storage=storage)
 
 # Создаем таблицы при запуске
 create_tables()
+APP_URL = os.getenv("APP_URL")
 
 # 2. Описание состояний онбординга
 class Onboarding(StatesGroup):
@@ -55,6 +56,22 @@ def create_inline_keyboard(buttons, prefix, row_width=2):
     for label, data_value in buttons:
         kb.insert(InlineKeyboardButton(label, callback_data=f"{prefix}:{data_value}"))
     return kb
+
+def get_platform_keyboard(user_id: int):
+    db = next(get_db())
+    try:
+        sub = get_active_subscription(db, user_id)
+        if sub:
+            kb = InlineKeyboardMarkup().add(
+                InlineKeyboardButton(
+                    "📲 Apri la piattaforma",
+                    web_app=WebAppInfo(url=APP_URL)
+                )
+            )
+            return kb
+        return None
+    finally:
+        db.close()
 
 # Общая клавиатура выбора метода оплаты
 def payment_method_keyboard():
@@ -91,8 +108,27 @@ def get_or_create_user(telegram_id: int, username: str = None, first_name: str =
     finally:
         db.close()
 
+#  ГЛУШИТЕЛЬ ДЛЯ ГРУПП 
+@dp.message_handler(lambda m: (m.chat.type != types.ChatType.PRIVATE) and ((m.text or "").split()[0].lower() != "/app"), state="*")
+async def ignore_groups(msg: types.Message, state: FSMContext):
+    
+    return
+
+# ХЕНДЛЕР /app ДЛЯ ГРУПП 
+@dp.message_handler(commands=["app"], chat_type=[types.ChatType.SUPERGROUP, types.ChatType.GROUP])
+async def group_webapp(msg: types.Message):
+    kb = InlineKeyboardMarkup().add(
+        InlineKeyboardButton("📚 Открыть платформу", web_app=WebAppInfo(url=APP_URL))
+    )
+    sent = await msg.answer("Онлайн‑платформа ExpertLash:", reply_markup=kb)
+    # пробуем закрепить, если у бота есть права
+    try:
+        await bot.pin_chat_message(msg.chat.id, sent.message_id, disable_notification=True)
+    except Exception:
+        pass
+
 # 7. Старт онбординга
-@dp.message_handler(commands=["start"], state="*")
+@dp.message_handler(commands=["start"], state="*", chat_type=types.ChatType.PRIVATE)
 async def cmd_start(msg: types.Message, state: FSMContext):
     await state.finish()  # Сбрасываем состояние при старте
 
@@ -374,12 +410,12 @@ async def process_payment_method(c: types.CallbackQuery, state: FSMContext):
     await c.answer()
 
 # 15. Обработка кнопки "Начать заново"
-@dp.message_handler(text="🔄 Ricomincia da capo", state="*")
+@dp.message_handler(text="🔄 Ricomincia da capo", state="*", chat_type=types.ChatType.PRIVATE)
 async def restart_onboarding(msg: types.Message, state: FSMContext):
     await cmd_start(msg, state)
 
 # 16. Обработка кнопки "Отзывы"
-@dp.message_handler(text="⭐ Recensioni", state="*")
+@dp.message_handler(text="⭐ Recensioni", state="*", chat_type=types.ChatType.PRIVATE)
 async def show_reviews(msg: types.Message):
     await msg.answer("⭐ <b>Recensioni reali delle nostre studentesse:</b>")
     for i, (key, file_id) in enumerate(VIDEO_REVIEWS.items(), 1):
@@ -391,7 +427,7 @@ async def show_reviews(msg: types.Message):
         )
 
 # 17. Обработка кнопки "Консультация"
-@dp.message_handler(text="📞 Consulenza", state="*")
+@dp.message_handler(text="📞 Consulenza", state="*", chat_type=types.ChatType.PRIVATE)
 async def show_consultation_info(msg: types.Message):
     consultation_kb = InlineKeyboardMarkup(row_width=1).add(
         InlineKeyboardButton("📞 Contatta Liudmila", url="https://t.me/liudmylazhyltsova"),
@@ -425,7 +461,9 @@ async def show_my_subscription(msg: types.Message, state: FSMContext):
             start_date = subscription.created_at.strftime('%d.%m.%Y') if subscription.created_at else "—"
             end_date = subscription.expires_at.strftime('%d.%m.%Y') if subscription.expires_at else "—"
             order_id = getattr(subscription, "order_id", getattr(subscription, "payment_id", "—"))
-
+            
+            kb = get_platform_keyboard(msg.from_user.id)
+            
             await msg.answer(
                 f"💳 <b>La tua sottoscrizione è attiva!</b>\n\n"
                 f"📅 Data di attivazione: <b>{start_date}</b>\n"
@@ -447,6 +485,8 @@ async def show_my_subscription(msg: types.Message, state: FSMContext):
 # 19. Обработка любых других сообщений
 @dp.message_handler(state="*")
 async def handle_other_messages(msg: types.Message, state: FSMContext):
+    if msg.chat.type != types.ChatType.PRIVATE:
+        return  # в группах молчим
     current_state = await state.get_state()
     if current_state is None:
         await msg.answer(

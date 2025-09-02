@@ -9,7 +9,6 @@ from dotenv import load_dotenv
 
 # Загрузка переменных окружения
 load_dotenv()
-
 # --- Подключение к БД ---
 # Основные имена
 DB_USER = os.getenv("DB_USER") or os.getenv("user")
@@ -27,7 +26,6 @@ engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 # Настройка SQLAlchemy
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
-
 # ------------------------
 # Model users
 # ------------------------
@@ -203,7 +201,6 @@ def activate_subscription(db, order_id=None, telegram_id=None, amount=None, curr
     db.refresh(subscription)
     return subscription
 
-
 def cancel_subscription(db, subscription_id: str):
     sub = db.query(Subscription).filter(Subscription.subscription_id == subscription_id).first()
     if sub:
@@ -214,7 +211,6 @@ def cancel_subscription(db, subscription_id: str):
         db.refresh(sub)
     return sub
 
-
 def get_active_subscription(db, telegram_id: int):
     return db.query(Subscription).filter(
         Subscription.telegram_id == telegram_id,
@@ -222,11 +218,9 @@ def get_active_subscription(db, telegram_id: int):
         Subscription.expires_at > datetime.utcnow()
     ).first()
 
-
 def get_subscription_by_id(db, subscription_id: str):
     """Поиск строго по subscription_id (sub_... или PayPal id)."""
     return db.query(Subscription).filter(Subscription.subscription_id == subscription_id).first()
-
 
 def get_subscription_by_any(db, key: str):
     """Поиск по subscription_id ИЛИ order_id (удобно при reconciliation Stripe)."""
