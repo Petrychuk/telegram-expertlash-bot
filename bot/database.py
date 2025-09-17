@@ -1,13 +1,14 @@
 import os
+import enum
 from datetime import datetime, timedelta
 from sqlalchemy import (
     create_engine, Column, Integer, String, Float, Text,
     Boolean, DateTime, BigInteger, SmallInteger, ForeignKey,
-    UniqueConstraint, or_, func
+    UniqueConstraint, or_, func, Enum
 )
 from sqlalchemy.orm import sessionmaker, declarative_base, relationship
 from dotenv import load_dotenv
-
+    
 # Загрузка переменных окружения
 load_dotenv()
 # --- Подключение к БД ---
@@ -27,9 +28,15 @@ engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 # Настройка SQLAlchemy
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
+
 # ------------------------
 # Model users
 # ------------------------
+class UserRole(enum.Enum):
+    student = "student"
+    admin = "admin"
+    dev = "developer"
+    
 class User(Base):
     __tablename__ = "users"
 
@@ -38,6 +45,7 @@ class User(Base):
     username = Column(String, nullable=True)
     first_name = Column(String, nullable=True)
     last_name = Column(String, nullable=True)
+    role = Column(Enum(UserRole), default=UserRole.student, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     
     # Данные онбординга
@@ -45,7 +53,9 @@ class User(Base):
     level_choice = Column(String, nullable=True)
     time_choice = Column(String, nullable=True)
     goal_choice = Column(String, nullable=True)
-
+    
+    subscriptions = relationship("Subscription", back_populates="user", cascade="all, delete-orphan")
+    reactions = relationship("VideoReaction", back_populates="user", cascade="all, delete-orphan")
 # ------------------------
 # Model subscription
 # ------------------------
@@ -53,11 +63,11 @@ class Subscription(Base):
     __tablename__ = "subscriptions"
 
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, index=True) 
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False) 
     telegram_id = Column(BigInteger, index=True, nullable=False) 
 
     # Платежная система
-    payment_system = Column(String)                     # "paypal" или "stripe"
+    payment_system = Column(String)                     # "paypal" / "stripe"
     subscription_id = Column(String, unique=True, index=True)  
     customer_id = Column(String, nullable=True)         # ID клиента (Stripe Customer, PayPal Payer)
 
@@ -83,6 +93,8 @@ class Subscription(Base):
     last_nudge_at   = Column(DateTime, nullable=True)   # когда последний раз пинали pending
     nudges_count    = Column(Integer, default=0)        # сколько раз пинали pending
     last_warned_at  = Column(DateTime, nullable=True)   # когда последний раз предупреждали активную о скором окончании
+    
+    user = relationship("User", back_populates="subscriptions")
 
 # =========================
 # CONTENT: MODULES & VIDEOS
@@ -97,7 +109,7 @@ class Module(Base):
     position = Column(Integer, default=0, index=True)                # порядок
     is_free = Column(Boolean, default=False)                         # бесплатный (доступен без подписки)
     created_at = Column(DateTime, default=datetime.utcnow)
-
+    
     videos = relationship("Video", back_populates="module", cascade="all, delete-orphan")
 
 class Video(Base):
@@ -114,8 +126,7 @@ class Video(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     module = relationship("Module", back_populates="videos")
-
-    # Быстрые агрегаты через relationship не считаем — сделаем функциями
+    reactions = relationship("VideoReaction", back_populates="video", cascade="all, delete-orphan")
 
 # =========================
 # REACTIONS: LIKE & RATING
@@ -135,7 +146,9 @@ class VideoReaction(Base):
     liked = Column(Boolean, default=False)                 # лайк/анлайк
     rating = Column(SmallInteger, nullable=True)           # 1..5
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
+    
+    user = relationship("User", back_populates="reactions")
+    video = relationship("Video", back_populates="reactions")
 
 # Создание таблиц
 def create_tables():
@@ -147,8 +160,7 @@ def get_db():
     try:
         yield db
     finally:
-        db.close()
-
+        db.close()       
 # ------------------------
 # Users
 # ------------------------
