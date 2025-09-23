@@ -103,7 +103,20 @@ def get_or_create_user(telegram_id: int, username: str = None, first_name: str =
     try:
         user = get_user_by_telegram_id(db, telegram_id)
         if not user:
-            user = create_user(db, telegram_id, username, first_name, last_name)
+            # если юзер в ADMIN_IDS → роль admin, иначе student
+            from config import ADMIN_IDS
+            from database import UserRole
+
+            role = UserRole.admin if str(telegram_id) in [str(x) for x in ADMIN_IDS] else UserRole.student
+
+            user = create_user(
+                db,
+                telegram_id=telegram_id,
+                username=username,
+                first_name=first_name,
+                last_name=last_name,
+                role=role
+            )
         return user
     finally:
         db.close()
@@ -114,6 +127,46 @@ async def ignore_groups(msg: types.Message, state: FSMContext):
     
     return
 
+# ХЕНДЛЕР /app ДЛЯ ЛИЧКИ
+@dp.message_handler(commands=["app"], chat_type=types.ChatType.PRIVATE)
+async def private_webapp(msg: types.Message):
+    db = next(get_db())
+    try:
+        user = get_user_by_telegram_id(db, msg.from_user.id)
+
+        # Если юзер админ → всегда доступ
+        if user and user.role == "admin":
+            kb = InlineKeyboardMarkup().add(
+                InlineKeyboardButton(
+                    "📲 Apri la piattaforma (ADMIN)",
+                    web_app=WebAppInfo(url=APP_URL)
+                )
+            )
+            await msg.answer("✅ Accesso admin! Apri la piattaforma:", reply_markup=kb)
+            return
+
+        # Иначе проверяем подписку
+        sub = get_active_subscription(db, msg.from_user.id)
+        if sub:
+            kb = InlineKeyboardMarkup().add(
+                InlineKeyboardButton(
+                    "📲 Apri la piattaforma",
+                    web_app=WebAppInfo(url=APP_URL)
+                )
+            )
+            await msg.answer("✅ Abbonamento attivo! Apri la piattaforma:", reply_markup=kb)
+        else:
+            await msg.answer(
+                f"❌ Non hai un abbonamento attivo.\n\n"
+                f"Puoi accedere per soli {SUBSCRIPTION_PRICE}€ al mese.\n\n"
+                "Scegli il metodo di pagamento:",
+                reply_markup=payment_method_keyboard()
+            )
+            await Onboarding.payment_method.set()
+
+    finally:
+        db.close()
+        
 # ХЕНДЛЕР /app ДЛЯ ГРУПП 
 @dp.message_handler(commands=["app"], chat_type=[types.ChatType.SUPERGROUP, types.ChatType.GROUP])
 async def group_webapp(msg: types.Message):

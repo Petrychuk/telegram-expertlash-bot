@@ -5,7 +5,10 @@ ADMIN_FALLBACK_ID = int(os.getenv("ADMIN_FALLBACK_ID", "0")) or None
 VIDEO_PENDING_FILE_ID = os.getenv("VIDEO_PENDING_FILE_ID")
 VIDEO_PRESENTATION_FILE_ID = os.getenv("VIDEO_PRESENTATION_FILE_ID")
 VIDEO_REVIEWS = os.getenv("VIDEO_REVIEWS")
-ADMIN_IDS = os.getenv("ADMIN_IDS")
+
+_admin_ids = os.getenv("ADMIN_IDS", "")
+ADMIN_IDS = [s.strip() for s in _admin_ids.split(",") if s.strip()]
+
 
 # --- ВИДЕО FILE_ID (ЗАМЕНИТЕ НА РЕАЛЬНЫЕ ПОСЛЕ ЗАГРУЗКИ ВИДЕО) ---
 # Для тестирования используем None, чтобы отправлять текстовые заглушки

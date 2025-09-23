@@ -16,10 +16,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ---------- ПАРАМЕТРЫ (можно переопределить переменными окружения) ----------
-PENDING_MIN_AGE_HOURS = int(os.getenv("PENDING_MIN_AGE_HOURS", "3"))
-PENDING_COOLDOWN_HOURS = int(os.getenv("PENDING_COOLDOWN_HOURS", "24"))
-WARN_DAYS_BEFORE = int(os.getenv("WARN_DAYS_BEFORE", "2"))
+# ---------- ПАРАМЕТРЫ ----------
+PENDING_MIN_AGE_HOURS = int(os.getenv("PENDING_MIN_AGE_HOURS", "3"))   # ждать сколько часов перед пинком pending
+PENDING_COOLDOWN_HOURS = int(os.getenv("PENDING_COOLDOWN_HOURS", "24")) # как часто можно пинать одного
+WARN_DAYS_BEFORE = int(os.getenv("WARN_DAYS_BEFORE", "2"))             # за сколько дней предупреждать
 SEND_CANCEL_NOTICE = os.getenv("SEND_CANCEL_NOTICE", "1") == "1"
 
 ADMIN_IDS = [s.strip() for s in os.getenv("ADMIN_IDS", "").split(",") if s.strip()]
@@ -29,11 +29,9 @@ DRY_RUN = os.getenv("DRY_RUN", "0") == "1"
 
 def _safe_chat_id(tid: int | None) -> int | None:
     """
-    Когда DRY_RUN=1 — не трогаем БД и не дергаем платёжки.
-    Если всё-таки хотим увидеть сообщение «вживую», подставим первого админа.
+    Когда DRY_RUN=1 — не трогаем юзеров, подставляем админа.
     """
     return ADMIN_FALLBACK_ID if DRY_RUN and ADMIN_FALLBACK_ID else tid
-
 
 # =========================
 # 1) ПИНАЕМ pending
@@ -63,8 +61,7 @@ async def nudge_pending_subscriptions() -> int:
 
         for sub in pending:
             tid = sub.telegram_id
-            stripe_url = None
-            paypal_url = None
+            stripe_url = paypal_url = None
 
             if not DRY_RUN:
                 try:
@@ -116,9 +113,7 @@ async def nudge_pending_subscriptions() -> int:
         db.rollback()
     finally:
         db.close()
-
     return count
-
 
 # =========================
 # 2) ПРЕДУПРЕЖДАЕМ active
@@ -154,6 +149,7 @@ async def warn_expiring_subscriptions() -> int:
                 logger.info(f"[warn_expiring][DRY_RUN] would warn {sub.telegram_id}, {days_left} days left")
             else:
                 await ts.send_subscription_expiry_warning(_safe_chat_id(sub.telegram_id), days_left)
+
             sub.last_warned_at = now
             db.add(sub)
             count += 1
@@ -164,9 +160,7 @@ async def warn_expiring_subscriptions() -> int:
         db.rollback()
     finally:
         db.close()
-
     return count
-
 
 # =========================
 # 3) ДЕАКТИВИРУЕМ expired
@@ -199,6 +193,13 @@ async def deactivate_expired_subscriptions() -> int:
 
         for sub in expired:
             if not DRY_RUN:
+                # Удаляем из группы
+                try:
+                    await ts.kick_from_group(sub.telegram_id)
+                except Exception as e:
+                    logger.warning(f"[deactivate_expired] failed to kick {sub.telegram_id}: {e}")
+
+                # Генерим новые ссылки
                 stripe_url = paypal_url = None
                 try:
                     s = StripeService.create_subscription_session(sub.telegram_id)
@@ -214,8 +215,13 @@ async def deactivate_expired_subscriptions() -> int:
                 except Exception as e:
                     logger.error(f"[goodbye] paypal error for {sub.telegram_id}: {e}")
 
+                # Goodbye-сообщение
                 try:
-                    await ts.send_subscription_expired_goodbye(_safe_chat_id(sub.telegram_id), stripe_url, paypal_url)
+                    await ts.send_subscription_expired_goodbye(
+                        _safe_chat_id(sub.telegram_id),
+                        stripe_url,
+                        paypal_url
+                    )
                 except Exception as e:
                     logger.error(f"[goodbye] send failed for {sub.telegram_id}: {e}")
 
@@ -225,9 +231,7 @@ async def deactivate_expired_subscriptions() -> int:
         db.rollback()
     finally:
         db.close()
-
     return count
-
 
 # =========================
 # Объединённый запуск
@@ -253,10 +257,8 @@ async def run_all_jobs():
         except Exception as e:
             logger.error(f"notify admin failed: {e}")
 
-
 def run_all_sync():
     asyncio.run(run_all_jobs())
-
 
 if __name__ == "__main__":
     run_all_sync()

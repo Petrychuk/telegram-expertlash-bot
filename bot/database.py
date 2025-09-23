@@ -1,6 +1,7 @@
 import os
 import enum
-from datetime import datetime, timedelta
+from config import ADMIN_IDS
+from datetime import datetime, timedelta  
 from sqlalchemy import (
     create_engine, Column, Integer, String, Float, Text,
     Boolean, DateTime, BigInteger, SmallInteger, ForeignKey,
@@ -167,12 +168,24 @@ def get_db():
 def get_user_by_telegram_id(db, telegram_id: int):
     return db.query(User).filter(User.telegram_id == telegram_id).first()
 
-def create_user(db, telegram_id: int, username: str = None, first_name: str = None, last_name: str = None):
+def create_user(
+    db,
+    telegram_id: int,
+    username: str = None,
+    first_name: str = None,
+    last_name: str = None,
+    role: str = None
+):
+    # если роль не указана → проверяем ADMIN_IDS
+    if role is None:
+        role = UserRole.admin if str(telegram_id) in [str(x) for x in ADMIN_IDS] else UserRole.student
+
     user = User(
         telegram_id=telegram_id,
         username=username,
         first_name=first_name,
-        last_name=last_name
+        last_name=last_name,
+        role=role
     )
     db.add(user)
     db.commit()

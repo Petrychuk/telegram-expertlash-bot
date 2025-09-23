@@ -6,8 +6,9 @@ from pprint import pprint
 from database import (
     create_tables, get_db, create_user, get_user_by_telegram_id, update_user_onboarding,
     create_subscription, activate_subscription, cancel_subscription,
-    get_active_subscription, get_subscription_by_id
+    get_active_subscription, get_subscription_by_id, UserRole
 )
+from config import ADMIN_IDS
 
 def to_dict(model):
     """Аккуратно сериализуем SQLAlchemy модель без служебного поля."""
@@ -16,8 +17,10 @@ def to_dict(model):
     d = {k: v for k, v in vars(model).items() if k != "_sa_instance_state"}
     return d
 
+
 def rand_suffix(n=4):
     return "".join(random.choices(string.ascii_lowercase + string.digits, k=n))
+
 
 def main():
     print("🚀 Тест БД — полный цикл\n")
@@ -30,7 +33,7 @@ def main():
 
     # 2) Готовим уникальные тестовые данные
     suffix = rand_suffix()
-    tg_id = int("12345678")  # сам telegram_id может повторяться (у нас теперь нет unique на subscriptions)
+    tg_id = int("12345678")  # можно поменять на один из ADMIN_IDS для проверки роли admin
     sub_id = f"sub_{suffix}"
     cust_id = f"cust_{suffix}"
     print(f"🧪 Используемые ID: telegram_id={tg_id}, subscription_id={sub_id}\n")
@@ -49,7 +52,14 @@ def main():
             print("✅ Пользователь создан:")
         else:
             print("ℹ️  Пользователь уже существует, используем существующего:")
+
         pprint(to_dict(user)); print()
+
+        # 🔍 Проверка роли
+        role = user.role if isinstance(user.role, str) else user.role.value
+        role_status = "✅ admin" if str(tg_id) in ADMIN_IDS else "👩 student"
+        print(f"🎭 Роль пользователя в БД: {role} ({role_status})\n")
+        print(f"DEBUG: ADMIN_IDS = {ADMIN_IDS} (type={type(ADMIN_IDS)})")
 
         # 4) Онбординг
         user = update_user_onboarding(
