@@ -1,23 +1,10 @@
-/* Подключаем Tailwind v4 */
-@import "tailwindcss";
-/* если хочешь только части, можно так:
-@import "tailwindcss/preflight";
-@import "tailwindcss/utilities";
-*/
+/* webapp/src/app/globals.css */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
 
-/* дальше — твои переменные и стили */
-:root {
-  --color-background: #ffffff;
-  --color-foreground: #171717;
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-@media (prefers-color-scheme: dark) {
-  :root { --color-background:#0a0a0a; --color-foreground:#ededed; }
-}
-html, body { height: 100%; }
-body {
-  background: var(--color-background);
-  color: var(--color-foreground);
-  font-family: var(--font-sans), system-ui, sans-serif;
-}
+/* твои стили ниже */
+body { @apply bg-roseSoft-50 text-gray-800; }
+.card { @apply bg-white rounded-2xl shadow-card border border-roseSoft-100; }
+.btn-primary { @apply inline-flex items-center justify-center px-4 py-2 rounded-xl bg-roseSoft-500 text-white font-medium hover:bg-roseSoft-600 transition shadow-soft; }
+

@@ -1,39 +1,47 @@
-"use client";
-import { useEffect, useState } from "react";
+// /app/page.js
+import { redirect } from 'next/navigation';
+import { cookies } from 'next/headers';
+import Header from "@/components/Header";
+import ModuleCard from "@/components/ModuleCard";
+import Link from 'next/link';
 
-export default function Page() {
-  const [status, setStatus] = useState("Жду…");
-  const [token, setToken] = useState("");
+// Серверная функция для проверки токена и получения профиля
+async function getUserProfile(token) {
+  if (!token) return null;
+  const url = `${process.env.NEXT_PUBLIC_API_BASE}/api/auth/me`; // Запрос на бэкенд
 
-  useEffect(() => {
-    (async () => {
-      try {
-        const tg = window?.Telegram?.WebApp;
-        if (!tg?.initData) {
-          setStatus("Откройте через кнопку в Telegram — initData не найден.");
-          return;
-        }
-        setStatus("Нашёл initData, авторизуюсь…");
-        const base = process.env.NEXT_PUBLIC_API_BASE || "";
-        const r = await fetch(`${base}/api/auth/telegram`, {
-          method: "POST",
-          headers: {"Content-Type":"application/json"},
-          body: JSON.stringify({ init_data: tg.initData }),
-        });
-        const data = await r.json();
-        if (r.ok && data.token) { setToken(data.token); setStatus("OK: получили JWT"); }
-        else { setStatus(`Ошибка: ${data.error || r.statusText}`); }
-      } catch (e) { setStatus("Ошибка: " + e.message); }
-    })();
-  }, []);
+  const res = await fetch(url, {
+    headers: { 'Cookie': `auth_token=${token}` }, // Передаем токен как cookie
+    cache: 'no-store',
+  });
+
+  if (!res.ok) return null;
+  const { user } = await res.json(); // Бэкенд возвращает { user: ... }
+  return user;
+}
+
+// Серверная функция для получения модулей
+async function getModules(token) {
+    // ... (ваш код для получения модулей, он корректен)
+}
+
+export default async function HomePage() {
+  const token = (await cookies()).get('auth_token')?.value;
+  const profile = await getUserProfile(token);
+
+  // Главная проверка доступа
+  if (!profile || !profile.hasSubscription) {
+    redirect('/access-denied'); 
+  }
+
+  const modules = await getModules(token);
 
   return (
-    <main className="p-6">
-      <div className="max-w-xl mx-auto bg-white rounded-2xl shadow p-6">
-        <h1 className="text-xl font-semibold mb-2">ExpertLash — проверка WebApp</h1>
-        <div>Статус: {status}</div>
-        {token ? <pre className="text-xs break-all mt-2">{token}</pre> : null}
-      </div>
-    </main>
+    <>
+      <Header profile={profile} /> 
+      <main className="mx-auto max-w-6xl px-4 py-6">
+        {/* ... ваш JSX для отображения модулей ... */}
+      </main>
+    </>
   );
 }
