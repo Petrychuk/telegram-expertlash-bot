@@ -289,9 +289,17 @@ def cancel_subscription(db, subscription_id: str):
         db.refresh(sub)
     return sub
 
-def get_active_subscription(db, telegram_id: int):
+# def get_active_subscription(db, telegram_id: int):
+#     return db.query(Subscription).filter(
+#         Subscription.telegram_id == telegram_id,
+#         Subscription.status == "active",
+#         Subscription.expires_at > datetime.utcnow()
+#     ).first()
+
+def get_active_subscription(db, user_id: int): # <-- Принимаем user_id
+    """Ищет активную подписку по внутреннему ID пользователя."""
     return db.query(Subscription).filter(
-        Subscription.telegram_id == telegram_id,
+        Subscription.user_id == user_id,      # <-- Ищем по user_id
         Subscription.status == "active",
         Subscription.expires_at > datetime.utcnow()
     ).first()
