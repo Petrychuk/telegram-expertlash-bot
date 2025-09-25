@@ -207,22 +207,22 @@ def update_user_onboarding(db, telegram_id: int, format_choice: str, level_choic
 # =========================
 # SUBS HELPERS
 # =========================
-def create_subscription(db, telegram_id: int, payment_system: str, subscription_id: str, amount: float, customer_id: str = None):
+def create_subscription(db, user_id: int, payment_system: str, subscription_id: str, order_id: str, amount: float, customer_id: str = None):
     """
-    Создаёт запись подписки в статусе pending.
-    Для Stripe ты сейчас кладёшь сюда checkout.session.id.
-    Для PayPal — реальный subscription id.
+    Создаёт запись подписки в статусе pending, используя внутренний user_id.
     """
-    user = get_user_by_telegram_id(db, telegram_id)
+    # Находим пользователя по его внутреннему ID
+    user = db.query(User).filter(User.id == user_id).first()
     if not user:
+        # Эта ситуация маловероятна, но лучше ее обработать
         return None
 
     sub = Subscription(
         user_id=user.id,
-        telegram_id=telegram_id,
+        telegram_id=user.telegram_id, # Сохраняем для удобства отправки уведомлений
         payment_system=payment_system,
         subscription_id=subscription_id,
-        order_id=subscription_id,  # временно при Stripe: session_id == order_id
+        order_id=order_id,
         customer_id=customer_id,
         amount=amount,
         status="pending"

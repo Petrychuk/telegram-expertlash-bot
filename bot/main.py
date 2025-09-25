@@ -450,7 +450,7 @@ async def process_payment_method(c: types.CallbackQuery, state: FSMContext):
                     db,
                     user_id=user.id,
                     payment_system="stripe",
-                    subscription_id=result['session_id'], # Временно используем session_id как ID
+                    subscription_id=result['session_id'], 
                     order_id=result['session_id'],
                     amount=SUBSCRIPTION_PRICE,
                     customer_id=result.get('customer_id')
