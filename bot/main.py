@@ -182,26 +182,32 @@ async def group_webapp(msg: types.Message):
         pass
 
 # 7. Старт онбординга
+# 7. Старт онбординга (ФИНАЛЬНАЯ ВЕРСИЯ)
 @dp.message_handler(commands=["start"], state="*", chat_type=types.ChatType.PRIVATE)
 async def cmd_start(msg: types.Message, state: FSMContext):
-    await state.finish() 
+    await state.finish()  # Всегда сбрасываем состояние при /start
 
-    # Создаем или получаем пользователя в БД
-    user = get_or_create_user(
-        telegram_id=msg.from_user.id,
-        username=msg.from_user.username,
-        first_name=msg.from_user.first_name,
-        last_name=msg.from_user.last_name
-    )
+    # Сначала получаем пользователя из БД
     db = next(get_db())
     try:
+        user = get_or_create_user(
+            db, # Передаем сессию, чтобы избежать повторного открытия
+            telegram_id=msg.from_user.id,
+            username=msg.from_user.username,
+            first_name=msg.from_user.first_name,
+            last_name=msg.from_user.last_name
+        )
+        
         # Проверяем подписку по user.id
         subscription = get_active_subscription(db, user.id)
+        is_admin = (user.role == 'admin')
+
     finally:
         db.close()
 
-    if subscription or (user.role == 'admin'):
-        # СЦЕНАРИЙ: ПОДПИСКА АКТИВНА или ПОЛЬЗОВАТЕЛЬ - АДМИН
+    # --- ГЛАВНАЯ ЛОГИКА: ПРОВЕРКА ДОСТУПА ---
+    if subscription or is_admin:
+        # СЦЕНАРИЙ 1: У пользователя уже есть доступ
         kb = InlineKeyboardMarkup().add(
             InlineKeyboardButton("📲 Apri la piattaforma", web_app=WebAppInfo(url=APP_URL))
         )
@@ -209,19 +215,34 @@ async def cmd_start(msg: types.Message, state: FSMContext):
             f"🎉 Ciao, {msg.from_user.first_name}! Il tuo accesso è attivo. Apri la piattaforma:",
             reply_markup=kb
         )
+        # Отправляем основную клавиатуру отдельным сообщением для удобства
         await msg.answer("💡 <i>Usa i pulsanti qui sotto per una navigazione rapida:</i>",
                          reply_markup=get_main_reply_keyboard())
     else:
-        # СЦЕНАРИЙ: ПОДПИСКИ НЕТ
+        # СЦЕНАРИЙ 2: Доступа нет, запускаем полный онбординг
         await Onboarding.format.set()
+        
+        # Сначала отправляем основную клавиатуру
         await msg.answer("💡 <i>Per una navigazione rapida, usa i pulsanti nel pannello in basso:</i>",
                          reply_markup=get_main_reply_keyboard())
+        
+        # Затем начинаем онбординг
         format_kb = create_inline_keyboard([("📹 Video lezioni", "video"), ("🎯 Webinar pratici", "webinar")], prefix="format")
         await msg.answer(
             f"👋 Ciao, {msg.from_user.first_name}! Sono la tua assistente per il corso.\n\n"
-            "In quale formato preferisci studiare?",
+            "Facciamo conoscenza! In quale formato preferisci studiare?",
             reply_markup=format_kb
         )
+
+# Переопределяем get_or_create_user, чтобы он принимал сессию
+def get_or_create_user(db, telegram_id: int, username: str = None, first_name: str = None, last_name: str = None):
+    user = get_user_by_telegram_id(db, telegram_id)
+    if not user:
+        from config import ADMIN_IDS
+        from database import UserRole
+        role = UserRole.admin if str(telegram_id) in [str(x) for x in ADMIN_IDS] else UserRole.student
+        user = create_user(db, telegram_id=telegram_id, username=username, first_name=first_name, last_name=last_name, role=role)
+    return user
         
 # 8. Обработка формата
 @dp.callback_query_handler(lambda c: c.data.startswith("format:"), state=Onboarding.format)
