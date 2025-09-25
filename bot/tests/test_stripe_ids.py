@@ -1,5 +1,9 @@
 # test_stripe_ids.py
 import stripe
+import sys, os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from payment_service import StripeService
 from payment_config import (
     STRIPE_SECRET_KEY,
     STRIPE_RETURN_URL,
@@ -37,29 +41,23 @@ def get_or_create_price():
     )
     return price.id
 
+# --- Тестовые данные ---
+TEST_USER_ID = 12345 # Внутренний ID пользователя из вашей БД
+
 def main():
     try:
-        price_id = get_or_create_price()
+        # Вызываем наш обновленный сервис, передавая user_id
+        result = StripeService.create_subscription_session(user_id=TEST_USER_ID)
 
-        session = stripe.checkout.Session.create(
-            # важно: возвращаемся с session_id для возможного reconcile
-            success_url=f"{STRIPE_RETURN_URL}?session_id={{CHECKOUT_SESSION_ID}}",
-            cancel_url=STRIPE_CANCEL_URL,
-            mode="subscription",
-            line_items=[{"price": price_id, "quantity": 1}],
-            # Можно либо customer_email, либо создать кастомера отдельно.
-            customer_email=USER_EMAIL,
-            metadata={"telegram_id": str(TELEGRAM_ID)},
-        )
+        if not result.get('success'):
+            raise RuntimeError(result.get('error', 'Unknown error'))
 
         print("✅ Checkout Session создана")
         print("URL для тестовой оплаты (открой в браузере):")
-        print(session.url)
+        print(result['url'])
         print("\n=== Короткая сводка ===")
-        print("session.id:", session.id)
-        print("subscription:", session.get("subscription"))  # может быть None до оплаты
-        print("customer:", session.get("customer"))
-        print("metadata:", session.get("metadata"))
+        print("session.id:", result['session_id'])
+        print(f"metadata: {{'user_id': {TEST_USER_ID}}}") # Проверяем, что user_id будет передан
 
     except Exception as e:
         print("❌ Ошибка при создании Checkout Session:")
