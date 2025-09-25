@@ -2,11 +2,9 @@
 import json
 import logging
 from typing import Optional, Dict, Any
-
 import requests
 from requests.auth import HTTPBasicAuth
 import stripe
-
 from payment_config import (
     STRIPE_SECRET_KEY,
     STRIPE_RETURN_URL,
@@ -18,7 +16,7 @@ from payment_config import (
     PAYPAL_RETURN_URL,
     PAYPAL_CANCEL_URL,
     PAYPAL_WEBHOOK_ID,
-    STRIPE_WEBHOOK_SECRET,   # важно: именно секрет вебхука
+    STRIPE_WEBHOOK_SECRET, 
 )
 
 logger = logging.getLogger(__name__)
@@ -50,8 +48,7 @@ PAYPAL_API_BASE = getattr(
 # =========================
 def get_paypal_access_token() -> Optional[str]:
     """
-    Получить OAuth2 токен для PayPal API.
-    Возвращает строку токена или None при ошибке.
+    Получить OAuth2 токен для PayPal API. Возвращает строку токена или None при ошибке.
     """
     url = f"{PAYPAL_API_BASE}/v1/oauth2/token"
     headers = {"Accept": "application/json", "Accept-Language": "en_US"}
@@ -74,8 +71,6 @@ def get_paypal_access_token() -> Optional[str]:
     except Exception as e:
         logger.exception(f"PayPal token exception: {e}")
     return None
-
-
 # =========================
 # Stripe service
 # =========================
@@ -107,16 +102,15 @@ class StripeService:
         return price.id
 
     @staticmethod
-    def create_subscription_session(telegram_id: int, user_email: Optional[str] = None) -> Dict[str, Any]:
+    def create_subscription_session(user_id: int, user_email: Optional[str] = None) -> Dict[str, Any]:
         """
         Создать Checkout Session для подписки (Stripe).
-        Возвращает dict: {success, session_id, url, customer_id} или {success: False, error}
         """
         try:
             # создаём кастомера (email опционален)
             customer = stripe.Customer.create(
                 email=user_email,
-                metadata={"telegram_id": str(telegram_id)},
+                metadata={"user_id": str(user_id)},
             )
 
             price_id = StripeService._get_or_create_price()
@@ -127,14 +121,12 @@ class StripeService:
                 mode="subscription",
                 success_url=STRIPE_RETURN_URL + "?session_id={CHECKOUT_SESSION_ID}",
                 cancel_url=STRIPE_CANCEL_URL,
-                metadata={"telegram_id": str(telegram_id)},
+                metadata={"user_id": str(user_id)},
             )
 
             return {
-                "success": True,
-                "session_id": session.id,
-                "url": session.url,
-                "customer_id": customer.id,
+                "success": True, "session_id": session.id,
+                "url": session.url, "customer_id": customer.id,
             }
         except Exception as e:
             logger.exception(f"Stripe create session error: {e}")
@@ -171,22 +163,14 @@ class StripeService:
             logger.exception(f"Stripe cancel_subscription error: {e}")
             return {"success": False, "error": str(e)}
 
-
 # =========================
 # PayPal service
 # =========================
 class PayPalService:
     @staticmethod
-    def create_subscription(telegram_id: int) -> Dict[str, Any]:
+    def create_subscription(user_id: int) -> Dict[str, Any]:
         """
-        Создать подписку PayPal по заранее сконфигурированному plan_id.
-        Возвращает:
-          {success: True, subscription_id, approval_url}
-        или
-          {success: False, error}
-
-        ВНИМАНИЕ: запись в БД НЕ создаётся здесь — делай это после вызова,
-        как в main.py через create_subscription(...).
+        Создать подписку PayPal
         """
         try:
             token = get_paypal_access_token()
@@ -200,7 +184,7 @@ class PayPalService:
             }
             payload = {
                 "plan_id": PAYPAL_PLAN_ID,
-                "custom_id": str(telegram_id),
+                "custom_id": str(user_id),
                 "application_context": {
                     "brand_name": "Lash Course",
                     "locale": "en-US",
@@ -272,15 +256,12 @@ class PayPalService:
             logger.exception(f"PayPal cancel_subscription error: {e}")
             return {"success": False, "error": str(e)}
 
-
 # =========================
 # Webhook verifiers
 # =========================
 def verify_stripe_webhook(payload: bytes, sig_header: str):
     """
-    Корректная верификация Stripe вебхука.
-    Использует STRIPE_WEBHOOK_SECRET (не путать с секретным API‑ключом).
-    Возвращает объект event (dict) или None.
+    Корректная верификация Stripe вебхука. Использует STRIPE_WEBHOOK_SECRET. Возвращает объект event (dict) или None.
     """
     try:
         event = stripe.Webhook.construct_event(
@@ -292,7 +273,6 @@ def verify_stripe_webhook(payload: bytes, sig_header: str):
     except Exception as e:
         logger.error(f"verify_stripe_webhook error: {e}")
         return None
-
 
 def verify_paypal_webhook(headers: Dict[str, str], body) -> bool:
     """

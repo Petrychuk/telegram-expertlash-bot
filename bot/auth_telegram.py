@@ -51,7 +51,7 @@ def auth_telegram():
             user = create_user(db, tg_id, username=u.get("username"), first_name=u.get("first_name"), last_name=u.get("last_name"))
 
         is_admin = user.role == 'admin'
-        sub = get_active_subscription(db, user.id) # Теперь вызывается с user.id
+        sub = get_active_subscription(db, user.id) 
         has_access = is_admin or (sub is not None)
 
         if not has_access:

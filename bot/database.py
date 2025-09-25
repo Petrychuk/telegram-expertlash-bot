@@ -1,3 +1,4 @@
+#database.py
 import os
 import enum
 from config import ADMIN_IDS
@@ -231,52 +232,65 @@ def create_subscription(db, telegram_id: int, payment_system: str, subscription_
     db.refresh(sub)
     return sub
 
-def activate_subscription(db, order_id=None, telegram_id=None, amount=None, currency=None):
+def activate_subscription(db, user_id: int, order_id: str, amount: float = None, currency: str = None):
     """
-    Активирует подписку, пытаясь найти её по разным ключам:
-      - order_id (PayPal resource.id или Stripe checkout/session id/real sub id)
-      - subscription_id
-      - последняя подписка пользователя (по telegram_id)
+    Активирует подписку пользователя по его внутреннему user_id и order_id.
+    Это надежный способ, так как он точно связывает платеж с конкретным пользователем.
+    :param db: Сессия базы данных.
+    :param user_id: Внутренний ID пользователя (из таблицы users).
+    :param order_id: Уникальный ID заказа/сессии от платежной системы (Stripe session_id, PayPal order_id и т.д.).
+    :param amount: Сумма платежа (опционально, для обновления).
+    :param currency: Валюта платежа (опционально, для обновления).
     """
-    subscription = None
+    # 1. Ищем подписку, которая была создана для этого пользователя и этого заказа.
+    #    Это самый точный и надежный способ найти нужную запись.
+    subscription = db.query(Subscription).filter(
+        Subscription.user_id == user_id,
+        or_(
+            Subscription.order_id == str(order_id),
+            Subscription.subscription_id == str(order_id)
+        )
+    ).order_by(Subscription.created_at.desc()).first()
 
-    # 1) Ищем по order_id И/ИЛИ subscription_id
-    if order_id:
-        subscription = db.query(Subscription).filter(
-            or_(
-                Subscription.order_id == str(order_id),
-                Subscription.subscription_id == str(order_id),
-            )
-        ).first()
-
-    # 2) Фоллбек: по последней подписке юзера
-    if not subscription and telegram_id:
-        subscription = db.query(Subscription).filter_by(telegram_id=telegram_id)\
-            .order_by(Subscription.created_at.desc()).first()
-
+    # Фоллбэк: если по какой-то причине order_id не совпал (редкий случай),
+    # ищем последнюю неактивную подписку этого пользователя.
     if not subscription:
+        subscription = db.query(Subscription).filter(
+            Subscription.user_id == user_id,
+            Subscription.status == "pending"
+        ).order_by(Subscription.created_at.desc()).first()
+
+    # Если подписка так и не найдена, значит что-то пошло не так.
+    if not subscription:
+        # Можно добавить логирование, чтобы отследить такие случаи
+        # logging.error(f"Could not find subscription to activate for user_id={user_id} and order_id={order_id}")
         return None
 
+    # 2. Активируем подписку, обновляя ее поля.
     now = datetime.utcnow()
     subscription.status = "active"
-    subscription.activated_at = subscription.activated_at or now
-    subscription.expires_at = subscription.activated_at + timedelta(days=30)
-    subscription.has_group_access = True
-    subscription.group_joined_at = subscription.group_joined_at or now
+    
+    # Устанавливаем дату активации только один раз
+    if not subscription.activated_at:
+        subscription.activated_at = now
 
+    # Рассчитываем дату окончания от даты активации
+    subscription.expires_at = subscription.activated_at + timedelta(days=30)
+    
+    subscription.has_group_access = True
+    if not subscription.group_joined_at:
+        subscription.group_joined_at = now
+
+    # Обновляем сумму и валюту, если они были переданы
     if amount is not None:
         subscription.amount = amount
     if currency is not None:
         subscription.currency = currency
 
-    if telegram_id:
-        subscription.telegram_id = telegram_id
-        user = db.query(User).filter_by(telegram_id=telegram_id).first()
-        if user:
-            subscription.user_id = user.id
-
+    # 3. Сохраняем изменения в базе данных.
     db.commit()
     db.refresh(subscription)
+    
     return subscription
 
 def cancel_subscription(db, subscription_id: str):
@@ -289,19 +303,15 @@ def cancel_subscription(db, subscription_id: str):
         db.refresh(sub)
     return sub
 
-# def get_active_subscription(db, telegram_id: int):
-#     return db.query(Subscription).filter(
-#         Subscription.telegram_id == telegram_id,
-#         Subscription.status == "active",
-#         Subscription.expires_at > datetime.utcnow()
-#     ).first()
-
-def get_active_subscription(db, user_id: int): # <-- Принимаем user_id
-    """Ищет активную подписку по внутреннему ID пользователя."""
+def get_active_subscription(db, user_id: int): 
+    """
+    Ищет активную подписку для пользователя по его внутреннему ID.
+    """
+    now = datetime.utcnow()
     return db.query(Subscription).filter(
-        Subscription.user_id == user_id,      # <-- Ищем по user_id
+        Subscription.user_id == user_id,     
         Subscription.status == "active",
-        Subscription.expires_at > datetime.utcnow()
+        Subscription.expires_at > now
     ).first()
 
 def get_subscription_by_id(db, subscription_id: str):
@@ -318,8 +328,15 @@ def get_subscription_by_any(db, key: str):
     ).first()
 
 def user_has_access(db, telegram_id: int) -> bool:
-    """Простой чек: есть активная подписка сейчас?"""
-    return get_active_subscription(db, telegram_id) is not None
+    """
+    Правильная проверка доступа: находит пользователя по telegram_id,
+    а затем ищет активную подписку по его внутреннему user.id.
+    """
+    user = get_user_by_telegram_id(db, telegram_id)
+    if not user:
+        return False
+    # Вызываем get_active_subscription с правильным user.id
+    return get_active_subscription(db, user.id) is not None
 
 # =========================
 # CONTENT HELPERS (MODULES/VIDEOS)

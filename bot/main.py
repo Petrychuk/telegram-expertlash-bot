@@ -1,3 +1,4 @@
+#main.py
 import os
 import asyncio
 import logging
@@ -146,7 +147,7 @@ async def private_webapp(msg: types.Message):
             return
 
         # Иначе проверяем подписку
-        sub = get_active_subscription(db, msg.from_user.id)
+        sub = get_active_subscription(db, user.id)
         if sub:
             kb = InlineKeyboardMarkup().add(
                 InlineKeyboardButton(
@@ -183,34 +184,45 @@ async def group_webapp(msg: types.Message):
 # 7. Старт онбординга
 @dp.message_handler(commands=["start"], state="*", chat_type=types.ChatType.PRIVATE)
 async def cmd_start(msg: types.Message, state: FSMContext):
-    await state.finish()  # Сбрасываем состояние при старте
+    await state.finish() 
 
     # Создаем или получаем пользователя в БД
-    get_or_create_user(
+    user = get_or_create_user(
         telegram_id=msg.from_user.id,
         username=msg.from_user.username,
         first_name=msg.from_user.first_name,
         last_name=msg.from_user.last_name
     )
-    await Onboarding.format.set()
+    db = next(get_db())
+    try:
+        # Проверяем подписку по user.id
+        subscription = get_active_subscription(db, user.id)
+    finally:
+        db.close()
 
-    # Устанавливаем Reply-кнопки отдельным сообщением
-    await msg.answer("💡 <i>Per una navigazione rapida, usa i pulsanti nel pannello in basso:</i>",
-                     reply_markup=get_main_reply_keyboard())
-
-    # Inline-кнопки для формата обучения
-    format_kb = create_inline_keyboard([
-        ("📹 Video lezioni", "video"),
-        ("🎯 Webinar pratici", "webinar")
-    ], prefix="format", row_width=2)
-
-    await msg.answer(
-        f"👋 Ciao, {msg.from_user.first_name}! Sono la tua assistente per il corso «Ciglia: da principiante a esperta».\n\n"
-        "Facciamo conoscenza!\n\n"
-        "In quale formato preferisci studiare?\n\n",
-        reply_markup=format_kb
-    )
-
+    if subscription or (user.role == 'admin'):
+        # СЦЕНАРИЙ: ПОДПИСКА АКТИВНА или ПОЛЬЗОВАТЕЛЬ - АДМИН
+        kb = InlineKeyboardMarkup().add(
+            InlineKeyboardButton("📲 Apri la piattaforma", web_app=WebAppInfo(url=APP_URL))
+        )
+        await msg.answer(
+            f"🎉 Ciao, {msg.from_user.first_name}! Il tuo accesso è attivo. Apri la piattaforma:",
+            reply_markup=kb
+        )
+        await msg.answer("💡 <i>Usa i pulsanti qui sotto per una navigazione rapida:</i>",
+                         reply_markup=get_main_reply_keyboard())
+    else:
+        # СЦЕНАРИЙ: ПОДПИСКИ НЕТ
+        await Onboarding.format.set()
+        await msg.answer("💡 <i>Per una navigazione rapida, usa i pulsanti nel pannello in basso:</i>",
+                         reply_markup=get_main_reply_keyboard())
+        format_kb = create_inline_keyboard([("📹 Video lezioni", "video"), ("🎯 Webinar pratici", "webinar")], prefix="format")
+        await msg.answer(
+            f"👋 Ciao, {msg.from_user.first_name}! Sono la tua assistente per il corso.\n\n"
+            "In quale formato preferisci studiare?",
+            reply_markup=format_kb
+        )
+        
 # 8. Обработка формата
 @dp.callback_query_handler(lambda c: c.data.startswith("format:"), state=Onboarding.format)
 async def process_format(c: types.CallbackQuery, state: FSMContext):
@@ -390,78 +402,90 @@ async def process_final_choice(c: types.CallbackQuery, state: FSMContext):
         await state.finish()
         await c.answer()
 
-# 14. Обработка выбора способа оплаты
+# 14. Обработка выбора способа оплаты (ИСПРАВЛЕННАЯ ВЕРСИЯ)
 @dp.callback_query_handler(lambda c: c.data.startswith("payment_method:"), state=Onboarding.payment_method)
 async def process_payment_method(c: types.CallbackQuery, state: FSMContext):
     chosen_method = c.data.split(":", 1)[1]
     await state.update_data(payment_method=chosen_method)
 
-    if chosen_method == "stripe":
-        result = StripeService.create_subscription_session(c.from_user.id)
+    # Открываем сессию БД ОДИН РАЗ в начале
+    db = next(get_db())
+    try:
+        # 1. Находим пользователя по telegram_id, чтобы получить его внутренний user.id
+        user = get_user_by_telegram_id(db, c.from_user.id)
+        if not user:
+            await c.message.answer("Si è verificato un errore. Riprova con /start.")
+            await c.answer()
+            return
 
-        if result['success']:
-            db = next(get_db())
-            try:
+        # 2. В зависимости от выбора, создаем платеж, передавая user.id
+        if chosen_method == "stripe":
+            # Передаем user.id в сервис для сохранения в метаданных
+            result = StripeService.create_subscription_session(user.id)
+
+            if result.get('success'):
+                # Создаем запись в нашей БД, привязывая ее к user.id
                 create_subscription(
                     db,
-                    c.from_user.id,
+                    user_id=user.id,
                     payment_system="stripe",
-                    subscription_id=result['session_id'],
+                    subscription_id=result['session_id'], # Временно используем session_id как ID
+                    order_id=result['session_id'],
                     amount=SUBSCRIPTION_PRICE,
                     customer_id=result.get('customer_id')
                 )
-            finally:
-                db.close()
 
-            payment_link_kb = InlineKeyboardMarkup(row_width=1).add(
-                InlineKeyboardButton("💳 Procedi al pagamento", url=result['url'])
-            )
-            await c.message.answer(
-                "Hai scelto Stripe. Segui il link per effettuare il pagamento:\n\n"
-                "Dopo il pagamento riceverai automaticamente l'accesso al gruppo privato.",
-                reply_markup=payment_link_kb
-            )
+                payment_link_kb = InlineKeyboardMarkup(row_width=1).add(
+                    InlineKeyboardButton("💳 Procedi al pagamento", url=result['url'])
+                )
+                await c.message.answer(
+                    "Hai scelto Stripe. Segui il link per effettuare il pagamento:\n\n"
+                    "Dopo il pagamento riceverai automaticamente l'accesso.",
+                    reply_markup=payment_link_kb
+                )
+            else:
+                await c.message.answer(
+                    f"❌ Errore durante la creazione del pagamento: {result.get('error', 'sconosciuto')}\n\n"
+                    "Riprova oppure scegli un altro metodo di pagamento."
+                )
 
-        else:
-            await c.message.answer(
-                f"❌ Errore durante la creazione del pagamento: {result['error']}\n\n"
-                "Riprova oppure scegli un altro metodo di pagamento."
-            )
+        elif chosen_method == "paypal":
+            # Передаем user.id в сервис для сохранения в custom_id
+            result = PayPalService.create_subscription(user.id)
 
-    elif chosen_method == "paypal":
-        result = PayPalService.create_subscription(c.from_user.id)
-
-        if result['success']:
-            db = next(get_db())
-            try:
+            if result.get('success'):
+                # Создаем запись в нашей БД, привязывая ее к user.id
                 create_subscription(
                     db,
-                    c.from_user.id,
+                    user_id=user.id,
                     payment_system="paypal",
                     subscription_id=result['subscription_id'],
+                    order_id=result['subscription_id'],
                     amount=SUBSCRIPTION_PRICE
                 )
-            finally:
-                db.close()
 
-            payment_link_kb = InlineKeyboardMarkup(row_width=1).add(
-                InlineKeyboardButton("🅿️ Procedi al pagamento", url=result['approval_url'])
-            )
-            await c.message.answer(
-                "Hai scelto PayPal. Segui il link per effettuare il pagamento:\n\n"
-                "Dopo il pagamento riceverai automaticamente l'accesso al gruppo privato.",
-                reply_markup=payment_link_kb
-            )
+                payment_link_kb = InlineKeyboardMarkup(row_width=1).add(
+                    InlineKeyboardButton("🅿️ Procedi al pagamento", url=result['approval_url'])
+                )
+                await c.message.answer(
+                    "Hai scelto PayPal. Segui il link per effettuare il pagamento:\n\n"
+                    "Dopo il pagamento riceverai automaticamente l'accesso.",
+                    reply_markup=payment_link_kb
+                )
+            else:
+                await c.message.answer(
+                    f"❌ Errore durante la creazione del pagamento: {result.get('error', 'sconosciuto')}\n\n"
+                    "Riprova oppure scegli un altro metodo di pagamento."
+                )
 
-        else:
-            await c.message.answer(
-                f"❌ Errore durante la creazione del pagamento: {result['error']}\n\n"
-                "Riprova oppure scegli un altro metodo di pagamento."
-            )
+    finally:
+        # Закрываем сессию БД ОДИН РАЗ в конце, независимо от результата
+        db.close()
 
+    # Завершаем состояние и отвечаем на callback
     await state.finish()
     await c.answer()
-
+    
 # 15. Обработка кнопки "Начать заново"
 @dp.message_handler(text="🔄 Ricomincia da capo", state="*", chat_type=types.ChatType.PRIVATE)
 async def restart_onboarding(msg: types.Message, state: FSMContext):
@@ -509,7 +533,7 @@ async def show_my_subscription(msg: types.Message, state: FSMContext):
             await Onboarding.payment_method.set()
             return
 
-        subscription = get_active_subscription(db, msg.from_user.id)
+        subscription = get_active_subscription(db, user.id)
         if subscription:
             start_date = subscription.created_at.strftime('%d.%m.%Y') if subscription.created_at else "—"
             end_date = subscription.expires_at.strftime('%d.%m.%Y') if subscription.expires_at else "—"
