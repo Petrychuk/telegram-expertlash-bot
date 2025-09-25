@@ -1,89 +1,144 @@
-# tests/test_03_webhooks.py
-
+# tests/test_03_webhooks.py 
 import json
 from unittest.mock import patch, MagicMock
+from datetime import datetime, timedelta
 
 # --- Тестовые данные ---
 TEST_USER_ID = 55555
-STRIPE_SESSION_ID = "cs_test_12345"
+TEST_TG_ID = 123456789
+STRIPE_SESSION_ID = "cs_test_12345" # ID сессии для новой подписки
+STRIPE_SUB_ID = "sub_stripe_real_id" # Реальный ID подписки Stripe
 PAYPAL_SUB_ID = "I-ABCDEFGHIJKL"
 
-# --- Тестовые полезные нагрузки (payloads) ---
-STRIPE_PAYLOAD = {
-    "id": "evt_123", "object": "event", "type": "checkout.session.completed",
-    "data": {
-        "object": {
-            "id": STRIPE_SESSION_ID, "object": "checkout.session",
-            "metadata": {"user_id": str(TEST_USER_ID)},
-            "amount_total": 3000, "currency": "eur"
-        }
-    }
-}
+# --- Генераторы тестовых событий (Payloads) ---
 
-PAYPAL_PAYLOAD = {
-    "event_type": "BILLING.SUBSCRIPTION.ACTIVATED",
-    "resource": {
-        "id": PAYPAL_SUB_ID,
-        "custom_id": str(TEST_USER_ID)
-    }
-}
+def stripe_event(event_type, data):
+    """Вспомогательная функция для создания объекта события Stripe."""
+    return {"id": "evt_test_123", "object": "event", "type": event_type, "data": {"object": data}}
 
-# Используем patch для имитации верификации подписи
-@patch('payment_service.verify_stripe_webhook', return_value=STRIPE_PAYLOAD)
+# Событие: Успешная первая оплата
+stripe_checkout_completed = stripe_event(
+    'checkout.session.completed',
+    {"id": STRIPE_SESSION_ID, "object": "checkout.session", "subscription": STRIPE_SUB_ID, "metadata": {"user_id": str(TEST_USER_ID)}, "amount_total": 3000, "currency": "eur"}
+)
+
+# Событие: Успешное продление подписки
+stripe_invoice_paid = stripe_event(
+    'invoice.payment_succeeded',
+    {"subscription": STRIPE_SUB_ID}
+)
+
+# Событие: Неудачное продление подписки
+stripe_invoice_failed = stripe_event(
+    'invoice.payment_failed',
+    {"subscription": STRIPE_SUB_ID}
+)
+
+# Событие: Пользователь отменил подписку
+stripe_subscription_deleted = stripe_event(
+    'customer.subscription.deleted',
+    {"id": STRIPE_SUB_ID}
+)
+
+# Событие: PayPal активировал подписку
+paypal_activated = {"event_type": "BILLING.SUBSCRIPTION.ACTIVATED", "resource": {"id": PAYPAL_SUB_ID, "custom_id": str(TEST_USER_ID)}}
+
+# Событие: PayPal отменил подписку
+paypal_cancelled = {"event_type": "BILLING.SUBSCRIPTION.CANCELLED", "resource": {"id": PAYPAL_SUB_ID}}
+
+
+# === Тесты для Stripe ===
+
+@patch('payment_service.verify_stripe_webhook')
 @patch('telegram_service.TelegramService.send_payment_success_notification', new_callable=MagicMock)
-def test_stripe_webhook_success(mock_send_notification, mock_verify, client, db_session):
-    """E2E Тест: Вебхук Stripe должен активировать подписку."""
-    from database import create_user, create_subscription
+def test_stripe_webhook_checkout_completed(mock_send_notification, mock_verify, client, db_session):
+    """Тест [Stripe]: Успешная активация новой подписки."""
+    from database import create_user, create_subscription, get_active_subscription
+    mock_verify.return_value = stripe_checkout_completed
     
-    # 1. Создаем пользователя и pending подписку
-    user = create_user(db_session, telegram_id=123)
+    user = create_user(db_session, telegram_id=TEST_TG_ID)
     create_subscription(db_session, user_id=user.id, order_id=STRIPE_SESSION_ID, payment_system="stripe")
 
-    # 2. Отправляем фейковый запрос на вебхук
-    response = client.post(
-        "/webhook/stripe",
-        data=json.dumps(STRIPE_PAYLOAD),
-        content_type="application/json",
-        headers={"Stripe-Signature": "dummy_sig"}
-    )
+    response = client.post("/webhook/stripe", data=json.dumps(stripe_checkout_completed), content_type="application/json")
     
-    # 3. Проверяем результат
     assert response.status_code == 200
-    
-    # 4. Проверяем, что подписка в БД стала активной
-    from database import get_active_subscription
     active_sub = get_active_subscription(db_session, user_id=user.id)
     assert active_sub is not None
     assert active_sub.status == "active"
-    
-    # 5. Проверяем, что было вызвано уведомление в Telegram
+    assert active_sub.subscription_id == STRIPE_SUB_ID # Проверяем, что ID обновился
     mock_send_notification.assert_called_once()
+
+@patch('payment_service.verify_stripe_webhook')
+@patch('telegram_service.TelegramService.send_subscription_renewed_notification', new_callable=MagicMock)
+def test_stripe_webhook_invoice_paid(mock_send_notification, mock_verify, client, db_session):
+    """Тест [Stripe]: Успешное продление существующей подписки."""
+    from database import create_user, create_subscription, activate_subscription
+    mock_verify.return_value = stripe_invoice_paid
+
+    user = create_user(db_session, telegram_id=TEST_TG_ID)
+    sub = create_subscription(db_session, user_id=user.id, subscription_id=STRIPE_SUB_ID, order_id="old_order", payment_system="stripe")
+    # "Состарим" подписку, чтобы было что продлевать
+    sub.expires_at = datetime.utcnow() + timedelta(days=1)
+    db_session.commit()
+    
+    response = client.post("/webhook/stripe", data=json.dumps(stripe_invoice_paid), content_type="application/json")
+
+    assert response.status_code == 200
+    db_session.refresh(sub)
+    # Проверяем, что дата окончания сдвинулась примерно на 30 дней в будущее
+    assert sub.expires_at > datetime.utcnow() + timedelta(days=28)
+    mock_send_notification.assert_called_once()
+
+@patch('payment_service.verify_stripe_webhook')
+@patch('telegram_service.TelegramService.send_subscription_cancelled_notification', new_callable=MagicMock)
+def test_stripe_webhook_subscription_deleted(mock_send_notification, mock_verify, client, db_session):
+    """Тест [Stripe]: Отмена подписки."""
+    from database import create_user, create_subscription, activate_subscription
+    mock_verify.return_value = stripe_subscription_deleted
+
+    user = create_user(db_session, telegram_id=TEST_TG_ID)
+    sub = create_subscription(db_session, user_id=user.id, subscription_id=STRIPE_SUB_ID, order_id="ord_del", payment_system="stripe")
+    activate_subscription(db_session, user_id=user.id, order_id="ord_del")
+
+    response = client.post("/webhook/stripe", data=json.dumps(stripe_subscription_deleted), content_type="application/json")
+
+    assert response.status_code == 200
+    db_session.refresh(sub)
+    assert sub.status == "cancelled"
+    mock_send_notification.assert_called_once()
+
+# === Тесты для PayPal ===
 
 @patch('payment_service.verify_paypal_webhook', return_value=True)
 @patch('telegram_service.TelegramService.send_payment_success_notification', new_callable=MagicMock)
-def test_paypal_webhook_success(mock_send_notification, mock_verify, client, db_session):
-    """E2E Тест: Вебхук PayPal должен активировать подписку."""
-    from database import create_user, create_subscription
+def test_paypal_webhook_activated(mock_send_notification, mock_verify, client, db_session):
+    """Тест [PayPal]: Успешная активация новой подписки."""
+    from database import create_user, create_subscription, get_active_subscription
     
-    # 1. Создаем пользователя и pending подписку
-    user = create_user(db_session, telegram_id=456)
+    user = create_user(db_session, telegram_id=TEST_TG_ID)
     create_subscription(db_session, user_id=user.id, order_id=PAYPAL_SUB_ID, payment_system="paypal")
 
-    # 2. Отправляем фейковый запрос на вебхук
-    response = client.post(
-        "/webhook/paypal",
-        data=json.dumps(PAYPAL_PAYLOAD),
-        content_type="application/json",
-        headers={"Some-PayPal-Header": "dummy"}
-    )
+    response = client.post("/webhook/paypal", data=json.dumps(paypal_activated), content_type="application/json")
     
-    # 3. Проверяем результат
     assert response.status_code == 200
-    
-    # 4. Проверяем, что подписка в БД стала активной
-    from database import get_active_subscription
     active_sub = get_active_subscription(db_session, user_id=user.id)
     assert active_sub is not None
     assert active_sub.status == "active"
+    mock_send_notification.assert_called_once()
+
+@patch('payment_service.verify_paypal_webhook', return_value=True)
+@patch('telegram_service.TelegramService.send_subscription_cancelled_notification', new_callable=MagicMock)
+def test_paypal_webhook_cancelled(mock_send_notification, mock_verify, client, db_session):
+    """Тест [PayPal]: Отмена подписки."""
+    from database import create_user, create_subscription, activate_subscription
     
-    # 5. Проверя
+    user = create_user(db_session, telegram_id=TEST_TG_ID)
+    sub = create_subscription(db_session, user_id=user.id, subscription_id=PAYPAL_SUB_ID, order_id="ord_cancel", payment_system="paypal")
+    activate_subscription(db_session, user_id=user.id, order_id="ord_cancel")
+
+    response = client.post("/webhook/paypal", data=json.dumps(paypal_cancelled), content_type="application/json")
+
+    assert response.status_code == 200
+    db_session.refresh(sub)
+    assert sub.status == "cancelled"
+    mock_send_notification.assert_called_once()

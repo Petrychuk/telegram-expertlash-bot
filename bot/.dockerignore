@@ -1,0 +1,30 @@
+# .dockerignore
+
+# Исключаем виртуальное окружение Python
+venv/
+.venv/
+
+# Исключаем кэш Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Исключаем папки с тестами и временные файлы pytest
+tests/
+.pytest_cache/
+
+# Исключаем файлы IDE и локальные настройки
+.vscode/
+.idea/
+
+# Исключаем локальные файлы .env (переменные должны быть в Railway)
+.env
+.env.*
+
+# Исключаем файлы Git
+.git/
+.gitignore
+
+# Исключаем любые локальные базы данных SQLite
+*.db
+*.sqlite3
