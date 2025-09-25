@@ -1,11 +1,9 @@
-
+//layout.js
 import "./globals.css";
 import Script from "next/script";
 import { Inter } from 'next/font/google'; //Manrope или Nunito (можно еще и такие попробывать)
 
-// Импортируем ваши провайдеры, которые вы создадите
-import { TelegramProvider } from '@/hooks/useTelegram';
-import { AuthProvider } from '@/hooks/useAuth';
+import AuthGate from "@/components/AuthGate";
 
 const inter = Inter({ subsets: ['latin'] });
 
@@ -32,11 +30,9 @@ export default function RootLayout({ children }) {
           и статусу его подписки в любом компоненте приложения,
           не "прокидывая" их через props.
         */}
-        <TelegramProvider>
-          <AuthProvider>
-            {children}
-          </AuthProvider>
-        </TelegramProvider>
+        <AuthGate>
+          {children}
+        </AuthGate>
 
       </body>
     </html>
