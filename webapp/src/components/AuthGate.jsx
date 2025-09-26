@@ -31,7 +31,7 @@ export default function AuthGate({ children }) {
       setStatus('error');
       return;
     }
-
+    console.log("FRONTEND initData:", initData);
     const authenticateAndFetchUser = async () => {
       try {
         // Этап 1: Аутентификация
