@@ -6,20 +6,28 @@ from urllib.parse import parse_qsl
 from flask import Blueprint, request, jsonify, current_app, make_response
 from database import get_db, get_user_by_telegram_id, create_user, get_active_subscription, UserRole, User
 
-# Настраиваем логгер
 logger = logging.getLogger(__name__)
 bp = Blueprint("auth_tg", __name__)
 
 def check_telegram_auth(init_data: str, bot_token: str) -> Optional[Dict[str, Any]]:
-    # ... (эта функция без изменений)
     if not init_data or not bot_token: return None
+    
     data = dict(parse_qsl(init_data, keep_blank_values=True))
+    
+    # Извлекаем и удаляем ОБА поля: и hash, и signature
     recv_hash = data.pop("hash", None)
+    data.pop("signature", None) # Эта строка решает всю проблему
+    
     if not recv_hash: return None
+
+    # Теперь в data остались только те поля, которые нужны для проверки
     check_str = "\n".join(f"{k}={data[k]}" for k in sorted(data.keys()))
+    
     secret = hashlib.sha256(bot_token.encode("utf-8")).digest()
     calc_hash = hmac.new(secret, check_str.encode("utf-8"), hashlib.sha256).hexdigest()
+    
     if not hmac.compare_digest(calc_hash, recv_hash): return None
+    
     return data
 
 @bp.post("/api/auth/telegram")
