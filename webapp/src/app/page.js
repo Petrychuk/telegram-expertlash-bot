@@ -1,18 +1,15 @@
 // webapp/src/app/page.js
 "use client"; 
-
 import { useEffect, useState } from 'react';
 import { useAuth } from '@/context/AuthContext'; 
 import Header from "@/components/Header";
 import ModuleCard from "@/components/ModuleCard";
 import Link from 'next/link';
 
-// Клиентская функция для загрузки модулей
 async function getModules() {
   const url = `${process.env.NEXT_PUBLIC_API_BASE}/api/modules`; 
   try {
-    // fetch автоматически использует cookie, установленные для домена
-    const res = await fetch(url); 
+    const res = await fetch(url); // Cookie отправляются автоматически.
     if (!res.ok) {
       console.error("Failed to fetch modules:", res.status);
       return [];
@@ -25,26 +22,24 @@ async function getModules() {
 }
 
 export default function HomePage() {
-  const { user } = useAuth(); // Получаем пользователя из контекста
+  const { user } = useAuth();
   const [modules, setModules] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    // Загружаем модули, только если пользователь аутентифицирован
     if (user) { 
       getModules().then(data => {
         setModules(data);
         setIsLoading(false);
       });
     }
-  }, [user]); // Эффект зависит от user
+  }, [user]);
 
-  // Если user еще не загружен (AuthGate работает), показываем заглушку
+  // Пока AuthGate работает и user не определен, показываем заглушку.
   if (!user) {
     return <div className="flex items-center justify-center h-screen">Загрузка данных пользователя...</div>;
   }
 
-  // Основной рендер компонента
   return (
     <>
       <Header profile={user} /> 
@@ -64,7 +59,7 @@ export default function HomePage() {
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
               {modules.map((module) => (
                 <Link href={`/module/${module.id}`} key={module.id}>
-                  <ModuleCard item={module} />
+                  <a><ModuleCard item={module} /></a>
                 </Link>
               ))}
             </div>

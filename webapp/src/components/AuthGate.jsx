@@ -2,7 +2,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import { useAuth } from "@/context/AuthContext";
-import { usePathname, useRouter } from 'next/navigation'; 
+import { usePathname, useRouter } from 'next/navigation';
 
 export default function AuthGate({ children }) {
   const { user, setUser } = useAuth();
@@ -13,28 +13,23 @@ export default function AuthGate({ children }) {
   const pathname = usePathname();
 
   useEffect(() => {
-    // Если мы уже на странице ошибки, ничего не делаем
-    if (pathname === '/access-denied') {
-      setStatus('success'); // Позволяем отобразить страницу ошибки
-      return;
-    }
-
-    // Если пользователь уже есть, не перезапускаем аутентификацию
-    if (user) {
+    // Если мы на странице ошибки или пользователь уже есть, ничего не делаем.
+    if (pathname === '/access-denied' || user) {
       setStatus('success');
       return;
     }
 
+    // Шаг 1: Получаем "сырую" строку initData.
     const initData = window.Telegram?.WebApp?.initData;
     if (!initData) {
       setErrorDetails("Не удалось получить данные Telegram. Откройте приложение через Telegram.");
       setStatus('error');
       return;
     }
-    console.log("FRONTEND initData:", initData);
+
     const authenticateAndFetchUser = async () => {
       try {
-        // Этап 1: Аутентификация
+        // Шаг 2: Отправляем initData на бэкенд без каких-либо изменений.
         const authApiUrl = `${process.env.NEXT_PUBLIC_API_BASE}/api/auth/telegram`;
         const authRes = await fetch(authApiUrl, {
           method: 'POST',
@@ -43,33 +38,34 @@ export default function AuthGate({ children }) {
         });
 
         if (!authRes.ok) {
-          const errorData = await authRes.json();
-          throw new Error(errorData.error || `Ошибка аутентификации: ${authRes.status}`);
+          const errorData = await authRes.json().catch(() => ({ error: `Authentication failed with status: ${authRes.status}` }));
+          throw new Error(errorData.error || 'unknown_auth_error');
         }
 
-        // Этап 2: Получение профиля
+        // Шаг 3: Если аутентификация успешна, бэкенд установил cookie.
+        // Теперь делаем запрос к /me, чтобы получить данные пользователя.
         const meApiUrl = `${process.env.NEXT_PUBLIC_API_BASE}/api/auth/me`;
-        const meRes = await fetch(meApiUrl);
+        const meRes = await fetch(meApiUrl); // fetch автоматически отправит cookie.
 
         if (!meRes.ok) {
-          const errorData = await meRes.json();
-          throw new Error(errorData.error || `Не удалось получить профиль: ${meRes.status}`);
+          const errorData = await meRes.json().catch(() => ({ error: `Profile fetch failed with status: ${meRes.status}` }));
+          throw new Error(errorData.error || 'unknown_profile_error');
         }
 
         const userData = await meRes.json();
         
-        // Этап 3: Проверка прав доступа (авторизация)
+        // Шаг 4: Проверяем права доступа (авторизация).
         if (!userData.user || !userData.user.hasSubscription) {
-          router.push('/access-denied'); // Перенаправляем на страницу ошибки
-          return; // Прерываем выполнение
+          router.push('/access-denied'); // Нет подписки -> редирект.
+          return;
         }
 
-        // Успех!
+        // Шаг 5: Успех! Сохраняем пользователя в глобальном состоянии.
         setUser(userData.user);
         setStatus('success');
 
       } catch (e) {
-        setErrorDetails(e.message || "Сетевая ошибка.");
+        setErrorDetails(e.message);
         setStatus('error');
       }
     };
@@ -79,26 +75,22 @@ export default function AuthGate({ children }) {
   }, [pathname, router, setUser, user]);
 
   // --- Логика отображения ---
-
   if (status === 'loading') {
     return <div className="flex items-center justify-center h-screen">Аутентификация...</div>;
   }
 
   if (status === 'error') {
     return (
-      <div className="flex items-center justify-center h-screen">
-        <div className="text-center p-4 max-w-sm">
+      <div className="flex items-center justify-center h-screen text-center p-4">
+        <div>
           <p className="font-bold text-red-600">Ошибка аутентификации</p>
-          <p className="text-sm text-gray-600 mt-2">
-            Пожалуйста, полностью закройте и перезапустите приложение.
-          </p>
+          <p className="text-sm text-gray-600 mt-2">Пожалуйста, полностью закройте и перезапустите приложение.</p>
           <p className="text-xs text-gray-400 mt-4">Детали: {errorDetails}</p>
         </div>
       </div>
     );
   }
 
-  // Если статус 'success', показываем дочерний компонент
-  // (либо саму страницу, либо /access-denied, куда нас уже перенаправили)
+  // Если статус 'success', показываем дочерний компонент.
   return children;
 }
