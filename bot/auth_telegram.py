@@ -88,7 +88,7 @@ def auth_telegram():
 @bp.get("/api/auth/me")
 def get_current_user():
     jwt_secret = current_app.config.get("JWT_SECRET")
-    token = request.cookies.get('auth_token') # Читаем токен из cookie
+    token = request.cookies.get('auth_token')
 
     if not token:
         return jsonify({"error": "no_token"}), 401
@@ -101,15 +101,18 @@ def get_current_user():
 
     db = next(get_db())
     try:
-        user = db.query(User).filter(User.id == user_id).first() # Находим юзера по ID из токена
+        user = db.query(User).filter(User.id == user_id).first()
         if not user:
             return jsonify({"error": "user_not_found"}), 404
+
+        # --- ДОБАВЛЕНО ИСПРАВЛЕНИЕ ---
+        db.refresh(user) # Принудительно обновить объект user из БД
+        # ---------------------------
 
         is_admin = user.role == 'admin'
         sub = get_active_subscription(db, user.id)
         has_access = is_admin or (sub is not None)
 
-        # Возвращаем профиль в том же формате, что и фронтенд
         return jsonify({
             "user": {
                 "id": user.id,
