@@ -16,7 +16,18 @@ from telegram_service import TelegramService
 
 # --- Инициализация ---
 app = Flask(__name__)
-CORS(app)
+frontend_url = os.getenv("APP_URL") 
+
+if frontend_url:
+    # origins=[frontend_url] -> Разрешает запросы только с вашего сайта на Netlify.
+    # supports_credentials=True -> Разрешает фронтенду отправлять cookie (критически важно для аутентификации).
+    CORS(app, origins=[frontend_url], supports_credentials=True)
+else:
+    # Этот блок сработает только при локальной разработке, если вы не задали APP_URL.
+    # Он разрешает запросы с любого источника, но с передачей cookie.
+    CORS(app, supports_credentials=True)
+# --- КОНЕЦ НАСТРОЙКИ CORS ---
+
 app.config["BOT_TOKEN"] = os.getenv("BOT_TOKEN")
 app.config["JWT_SECRET"] = os.getenv("JWT_SECRET", "devsecret")
 app.register_blueprint(tg_bp)
