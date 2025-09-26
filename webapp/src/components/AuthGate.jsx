@@ -1,7 +1,5 @@
 // webapp/src/components/AuthGate.jsx
-
 "use client";
-
 import { useEffect, useState } from "react";
 
 // Простой компонент для отображения статуса загрузки
@@ -14,62 +12,78 @@ function Loader({ message }) {
 }
 
 export default function AuthGate({ children }) {
-  const [status, setStatus] = useState("loading"); // "loading", "error", "success"
+  // Состояния остаются теми же
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [error, setError] = useState(null);
+  const [isLoading, setIsLoading] = useState(true);
 
+  // Этот эффект будет выполняться один раз при монтировании компонента
   useEffect(() => {
+    // Получаем initData напрямую из объекта Telegram
+    const initData = window.Telegram?.WebApp?.initData;
+
+    // Если по какой-то причине initData нет (например, открыли в обычном браузере),
+    // сразу устанавливаем ошибку.
+    if (!initData) {
+      setError("Не удалось получить данные Telegram. Откройте приложение через Telegram.");
+      setIsLoading(false);
+      return;
+    }
+
     const authenticate = async () => {
-      // 1. Если cookie уже есть, значит мы аутентифицированы. Просто показываем приложение.
-      if (document.cookie.includes("auth_token=")) {
-        setStatus("success");
-        return;
-      }
-
-      // 2. Если cookie нет, начинаем процесс аутентификации
-      const tg = window.Telegram?.WebApp;
-      if (!tg || !tg.initData) {
-        // Эта ситуация возможна, если открыть приложение не через Telegram
-        setStatus("error");
-        return;
-      }
-
       try {
-        // 3. Отправляем initData на наш бэкенд
-        const response = await fetch('/api/auth/telegram', {
+        const apiUrl = `${process.env.NEXT_PUBLIC_API_BASE}/api/auth/telegram`;
+        
+        const res = await fetch(apiUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ init_data: tg.initData }),
+          body: JSON.stringify({ init_data: initData }),
         });
 
-        // 4. Анализируем ответ бэкенда
-        if (response.ok) {
-          // УСПЕХ! Бэкенд проверил нас и установил cookie.
-          // Перезагружаем страницу, чтобы серверные компоненты "увидели" новый cookie.
-          window.location.reload();
+        if (res.ok) {
+          setIsAuthenticated(true);
         } else {
-          // ОШИБКА ДОСТУПА. Бэкенд нас проверил и отказал (например, нет подписки).
-          // Перенаправляем на страницу "Доступ запрещен".
-          window.location.href = '/access-denied';
+          const errorData = await res.json();
+          setError(errorData.error || `Ошибка сервера: ${res.status}`);
         }
-      } catch (err) {
-        // Ошибка сети или другая проблема
-        console.error("Auth fetch error:", err);
-        setStatus("error");
+      } catch (e) {
+        setError("Сетевая ошибка. Проверьте URL бэкенда и настройки CORS.");
+        console.error("Authentication fetch error:", e);
+      } finally {
+        setIsLoading(false);
       }
     };
 
     authenticate();
-  }, []); // Пустой массив [] гарантирует, что эффект выполнится только один раз
+    
+  }, []); // Пустой массив зависимостей означает, что эффект выполнится один раз
 
-  // --- Отображение в зависимости от статуса ---
+  // --- Логика отображения состояний остается прежней ---
 
-  if (status === "loading") {
-    return <Loader message="Аутентификация..." />;
+  if (isLoading) {
+    return <div className="flex items-center justify-center h-screen">Аутентификация...</div>;
+  }
+  if (error) {
+    return (
+      <div className="flex items-center justify-center h-screen">
+        <div className="text-center p-4 max-w-sm">
+          <p className="font-bold text-red-600">Ошибка аутентификации</p>
+          <p className="text-sm text-gray-600 mt-2">
+            Пожалуйста, полностью закройте и перезапустите приложение через Telegram.
+          </p>
+          {/* Раскомментируйте для отладки, чтобы видеть детали ошибки */}
+          {/* <p className="text-xs text-gray-400 mt-4">Детали: {error}</p> */}
+        </div>
+      </div>
+    );
   }
 
-  if (status === "error") {
-    return <Loader message="Ошибка аутентификации. Пожалуйста, перезапустите приложение через Telegram." />;
+  if (isAuthenticated) {
+    // Успех! Показываем приложение.
+    return children;
   }
 
-  // Если статус "success", показываем основное приложение
-  return children;
+  // Если ни одно из условий не выполнилось (что маловероятно),
+  // можно показать пустой экран, чтобы избежать моргания.
+  return null; 
 }
