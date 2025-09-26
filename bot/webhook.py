@@ -1,20 +1,24 @@
 #webhook.py
 import os
 import stripe
-from datetime import datetime
-from flask import Flask, request, jsonify
-from auth_telegram import bp as tg_bp
-from flask_cors import CORS
 import threading
 import asyncio
 import logging
+import jwt  
+from datetime import datetime
+from flask import Flask, request, jsonify, current_app 
+from auth_telegram import bp as tg_bp
+from flask_cors import CORS
 
-# --- Правильные импорты ---
+# --- Импорты из ваших модулей (очищены от дублей) ---
 from payment_service import verify_stripe_webhook, verify_paypal_webhook
-from database import get_db, activate_subscription, cancel_subscription
+from database import get_db, activate_subscription, cancel_subscription, list_modules_for_user, User
 from telegram_service import TelegramService
 
 # --- Инициализация ---
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
 app = Flask(__name__)
 frontend_url = os.getenv("APP_URL") 
 
@@ -145,6 +149,36 @@ def paypal_webhook():
 
     return jsonify({'status': 'ok'}), 200
 
+@app.route('/api/modules', methods=['GET'])
+def get_modules_list():
+    """
+    Возвращает список модулей для аутентифицированного пользователя.
+    """
+    # Сначала получаем user_id из JWT-токена (как в /api/auth/me)
+    jwt_secret = current_app.config.get("JWT_SECRET")
+    token = request.cookies.get('auth_token')
+    if not token:
+        return jsonify({"error": "no_token"}), 401
+
+    try:
+        payload = jwt.decode(token, jwt_secret, algorithms=["HS256"])
+        user_id = int(payload["sub"])
+    except (jwt.ExpiredSignatureError, jwt.InvalidTokenError):
+        return jsonify({"error": "bad_token"}), 401
+
+    db = next(get_db())
+    try:
+        # Находим пользователя по его внутреннему ID
+        user = db.query(User).filter(User.id == user_id).first()
+        if not user:
+            return jsonify({"error": "user_not_found"}), 404
+        
+        # Получаем модули, используя его telegram_id
+        modules = list_modules_for_user(db, user.telegram_id)
+        return jsonify(modules)
+    finally:
+        db.close()
+
 # === Вспомогательные маршруты ===
 @app.route('/health', methods=['GET'])
 def health_check():
@@ -177,3 +211,4 @@ def paypal_cancel():
 @app.route("/")
 def index():
     return "Bot and webhook are running!"
+
