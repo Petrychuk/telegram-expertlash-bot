@@ -24,19 +24,36 @@ def check_telegram_auth(init_data: str, bot_token: str) -> Optional[Dict[str, An
 
 @bp.post("/api/auth/telegram")
 def auth_telegram():
-    # ... (начало без изменений)
     body = request.get_json(silent=True) or {}
+    
+    # --- ОТЛАДОЧНЫЙ ЛОГ 1: Посмотреть, что приходит на бэкенд ---
+    logger.info(f"Received auth request body: {body}")
+    
     init_data = body.get("init_data", "")
-    if not init_data: return jsonify({"error": "no_init_data"}), 400
+    if not init_data:
+        logger.error("Auth failed: 'init_data' field is missing in request body.")
+        return jsonify({"error": "no_init_data"}), 400
+
+    # --- ОТЛАДОЧНЫЙ ЛОГ 2: Посмотреть саму строку initData ---
+    logger.info(f"BACKEND initData: {init_data}")
 
     bot_token = current_app.config.get("BOT_TOKEN")
     jwt_secret = current_app.config.get("JWT_SECRET")
-    if not bot_token or not jwt_secret: return jsonify({"error": "server_misconfigured"}), 500
+    if not bot_token or not jwt_secret:
+        logger.error("Auth failed: server is misconfigured (BOT_TOKEN or JWT_SECRET is missing).")
+        return jsonify({"error": "server_misconfigured"}), 500
+
+    # --- ОТЛАДОЧНЫЙ ЛОГ 3: Убедиться, что используется правильный токен ---
+    token_preview = f"{bot_token[:4]}...{bot_token[-4:]}" if bot_token and len(bot_token) > 8 else "TOKEN_IS_INVALID_OR_SHORT"
+    logger.info(f"Using token preview: {token_preview}")
 
     data = check_telegram_auth(init_data, bot_token)
     if not data:
-        logger.warning("Auth failed: bad signature.")
+        logger.warning("Auth failed: bad signature. Check if FRONTEND and BACKEND initData strings match exactly.")
         return jsonify({"error": "bad_signature"}), 401
+
+    # --- Если мы дошли сюда, значит подпись верна! ---
+    logger.info("Signature is OK. Proceeding with user check.")
 
     try:
         u = json.loads(data.get("user", "{}")) or {}
@@ -55,8 +72,6 @@ def auth_telegram():
         
         logger.info(f"User found/created: internal_id={user.id}, tg_id={user.telegram_id}, role={user.role}")
 
-        # --- ГЛАВНОЕ ИСПРАВЛЕНИЕ ---
-        # Проверяем подписку по ВНУТРЕННЕМУ ID (user.id), а не по tg_id
         sub = get_active_subscription(db, user.id) 
         is_admin = user.role == UserRole.admin
         has_access = is_admin or (sub is not None)
@@ -67,7 +82,6 @@ def auth_telegram():
             logger.warning(f"Access denied for user_id={user.id} (tg_id={tg_id}): no active subscription.")
             return jsonify({"error": "no_subscription"}), 403
 
-        # ... (создание токена и ответа без изменений)
         now = int(time.time())
         payload = {"sub": user.id, "iat": now, "exp": now + 60 * 60 * 24 * 7, "role": user.role.value}
         token = jwt.encode(payload, jwt_secret, algorithm="HS256")
@@ -82,7 +96,7 @@ def auth_telegram():
         response.set_cookie(
             'auth_token', value=token, max_age=60 * 60 * 24 * 7,
             path='/', httponly=True, samesite='Lax'
-         )
+          )
         logger.info(f"Successfully authenticated user_id={user.id}. Token issued.")
         return response
 
