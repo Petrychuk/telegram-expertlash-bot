@@ -1,69 +1,66 @@
 // webapp/src/app/page.js
+"use client"; 
 
-import { redirect } from 'next/navigation';
-import { cookies } from 'next/headers';
+import { useEffect, useState } from 'react';
+import { useAuth } from '@/context/AuthContext'; 
 import Header from "@/components/Header";
 import ModuleCard from "@/components/ModuleCard";
 import Link from 'next/link';
 
-// --- Серверные функции, которые обращаются к Python-бэкенду ---
-
-async function getUserProfile(token) {
-  if (!token) return null;
-  const url = `${process.env.NEXT_PUBLIC_API_BASE}/api/auth/me`;
-  const res = await fetch(url, {
-    headers: { 'Cookie': `auth_token=${token}` },
-    cache: 'no-store',
-  });
-  if (!res.ok) return null;
-  const { user } = await res.json();
-  return user;
-}
-
-// ИСПРАВЛЕННАЯ ВЕРСИЯ getModules
-async function getModules(token) {
-  if (!token) return [];
-  // Указываем URL нашего Python-бэкенда
+// Клиентская функция для загрузки модулей
+async function getModules() {
   const url = `${process.env.NEXT_PUBLIC_API_BASE}/api/modules`; 
   try {
-    const res = await fetch(url, {
-      headers: { 'Cookie': `auth_token=${token}` }, // Передаем cookie для аутентификации
-      cache: 'no-store',
-    });
-    if (!res.ok) return [];
-    return res.json(); // Получаем JSON-массив модулей
+    // fetch автоматически использует cookie, установленные для домена
+    const res = await fetch(url); 
+    if (!res.ok) {
+      console.error("Failed to fetch modules:", res.status);
+      return [];
+    }
+    return res.json();
   } catch (error) {
     console.error("Error fetching modules:", error);
     return [];
   }
 }
 
-// --- Основной компонент страницы ---
+export default function HomePage() {
+  const { user } = useAuth(); // Получаем пользователя из контекста
+  const [modules, setModules] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
 
-export default async function HomePage() {
-  const token = (await cookies()).get('auth_token')?.value;
-  const profile = await getUserProfile(token);
+  useEffect(() => {
+    // Загружаем модули, только если пользователь аутентифицирован
+    if (user) { 
+      getModules().then(data => {
+        setModules(data);
+        setIsLoading(false);
+      });
+    }
+  }, [user]); // Эффект зависит от user
 
-  if (!profile || !profile.hasSubscription) {
-    redirect('/access-denied'); 
+  // Если user еще не загружен (AuthGate работает), показываем заглушку
+  if (!user) {
+    return <div className="flex items-center justify-center h-screen">Загрузка данных пользователя...</div>;
   }
 
-  const modules = await getModules(token);
-
+  // Основной рендер компонента
   return (
     <>
-      <Header profile={profile} /> 
+      <Header profile={user} /> 
       <main className="mx-auto max-w-6xl px-4 py-6">
         <section className="mb-8 text-center">
           <div className="bg-white p-6 rounded-lg shadow-sm">
             <h1 className="text-3xl font-bold text-gray-800 mb-2">Курс - ExpertLash</h1>
             <p className="text-md text-gray-600 max-w-2xl mx-auto">
-              Откройте для себя мир профессионального наращивания ресниц. Наши модули проведут вас от базовых техник до экспертного уровня.
+              Откройте для себя мир профессионального наращивания ресниц.
             </p>
           </div>
         </section>
         <section>
-          {modules && modules.length > 0 ? (
+          {isLoading ? (
+            <div className="text-center py-10">Загрузка модулей...</div>
+          ) : modules.length > 0 ? (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
               {modules.map((module) => (
                 <Link href={`/module/${module.id}`} key={module.id}>
@@ -73,7 +70,7 @@ export default async function HomePage() {
             </div>
           ) : (
             <div className="text-center py-10 px-6 bg-white rounded-lg shadow-sm">
-              <p className="text-gray-500">Модули не найдены.</p>
+              <p className="text-gray-500">Модули курса скоро появятся.</p>
             </div>
           )}
         </section>

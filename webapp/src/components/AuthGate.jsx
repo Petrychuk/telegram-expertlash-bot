@@ -1,25 +1,40 @@
 // webapp/src/components/AuthGate.jsx
 "use client";
 import { useEffect, useState } from "react";
-import { useAuth } from "@/context/AuthContext"; // Импортируем хук
+import { useAuth } from "@/context/AuthContext";
+import { usePathname, useRouter } from 'next/navigation'; 
 
 export default function AuthGate({ children }) {
-  const { setUser } = useAuth(); // Получаем функцию для установки пользователя
-  const [error, setError] = useState(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const { user, setUser } = useAuth();
+  const [status, setStatus] = useState("loading"); // 'loading', 'error', 'success'
+  const [errorDetails, setErrorDetails] = useState("");
+
+  const router = useRouter();
+  const pathname = usePathname();
 
   useEffect(() => {
-    const initData = window.Telegram?.WebApp?.initData;
+    // Если мы уже на странице ошибки, ничего не делаем
+    if (pathname === '/access-denied') {
+      setStatus('success'); // Позволяем отобразить страницу ошибки
+      return;
+    }
 
+    // Если пользователь уже есть, не перезапускаем аутентификацию
+    if (user) {
+      setStatus('success');
+      return;
+    }
+
+    const initData = window.Telegram?.WebApp?.initData;
     if (!initData) {
-      setError("Не удалось получить данные Telegram. Откройте приложение через Telegram.");
-      setIsLoading(false);
+      setErrorDetails("Не удалось получить данные Telegram. Откройте приложение через Telegram.");
+      setStatus('error');
       return;
     }
 
     const authenticateAndFetchUser = async () => {
       try {
-        // --- ЭТАП 1: АУТЕНТИФИКАЦИЯ И УСТАНОВКА COOKIE ---
+        // Этап 1: Аутентификация
         const authApiUrl = `${process.env.NEXT_PUBLIC_API_BASE}/api/auth/telegram`;
         const authRes = await fetch(authApiUrl, {
           method: 'POST',
@@ -32,10 +47,9 @@ export default function AuthGate({ children }) {
           throw new Error(errorData.error || `Ошибка аутентификации: ${authRes.status}`);
         }
 
-        // --- ЭТАП 2: ПОЛУЧЕНИЕ ДАННЫХ ПОЛЬЗОВАТЕЛЯ ---
-        // Cookie уже установлена, теперь делаем авторизованный запрос
+        // Этап 2: Получение профиля
         const meApiUrl = `${process.env.NEXT_PUBLIC_API_BASE}/api/auth/me`;
-        const meRes = await fetch(meApiUrl); // GET-запрос, cookie отправится автоматически
+        const meRes = await fetch(meApiUrl);
 
         if (!meRes.ok) {
           const errorData = await meRes.json();
@@ -43,39 +57,48 @@ export default function AuthGate({ children }) {
         }
 
         const userData = await meRes.json();
-        setUser(userData.user); // Сохраняем пользователя в глобальном состоянии
+        
+        // Этап 3: Проверка прав доступа (авторизация)
+        if (!userData.user || !userData.user.hasSubscription) {
+          router.push('/access-denied'); // Перенаправляем на страницу ошибки
+          return; // Прерываем выполнение
+        }
+
+        // Успех!
+        setUser(userData.user);
+        setStatus('success');
 
       } catch (e) {
-        setError(e.message || "Сетевая ошибка. Проверьте URL бэкенда и CORS.");
-        console.error("Auth process error:", e);
-      } finally {
-        setIsLoading(false);
+        setErrorDetails(e.message || "Сетевая ошибка.");
+        setStatus('error');
       }
     };
 
     authenticateAndFetchUser();
     
-  }, [setUser]); // Добавляем setUser в зависимости
+  }, [pathname, router, setUser, user]);
 
-  if (isLoading) {
+  // --- Логика отображения ---
+
+  if (status === 'loading') {
     return <div className="flex items-center justify-center h-screen">Аутентификация...</div>;
   }
 
-  if (error) {
+  if (status === 'error') {
     return (
       <div className="flex items-center justify-center h-screen">
         <div className="text-center p-4 max-w-sm">
           <p className="font-bold text-red-600">Ошибка аутентификации</p>
           <p className="text-sm text-gray-600 mt-2">
-            Пожалуйста, полностью закройте и перезапустите приложение через Telegram.
+            Пожалуйста, полностью закройте и перезапустите приложение.
           </p>
-          <p className="text-xs text-gray-400 mt-4">Детали: {error}</p>
+          <p className="text-xs text-gray-400 mt-4">Детали: {errorDetails}</p>
         </div>
       </div>
     );
   }
-  
-  // Если нет ошибки и загрузка завершена, значит пользователь успешно аутентифицирован
-  // и его данные сохранены в контексте. Показываем приложение.
+
+  // Если статус 'success', показываем дочерний компонент
+  // (либо саму страницу, либо /access-denied, куда нас уже перенаправили)
   return children;
 }
