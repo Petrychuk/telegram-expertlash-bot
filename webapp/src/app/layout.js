@@ -3,7 +3,7 @@ import "./globals.css";
 import Script from "next/script";
 import { Inter } from 'next/font/google'; //Manrope или Nunito (можно еще и такие попробывать)
 
-import AuthGate from "@/components/AuthGate";
+import { AuthProvider } from "@/context/AuthContext";
 
 const inter = Inter({ subsets: ['latin'] });
 
@@ -30,9 +30,9 @@ export default function RootLayout({ children }) {
           и статусу его подписки в любом компоненте приложения,
           не "прокидывая" их через props.
         */}
-        <AuthGate>
+        <AuthProvider>
           {children}
-        </AuthGate>
+        </AuthProvider>
 
       </body>
     </html>
