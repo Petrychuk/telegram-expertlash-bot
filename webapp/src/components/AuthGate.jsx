@@ -21,14 +21,14 @@ export default function AuthGate({ children }) {
 
     // Шаг 1: Получаем "сырую" строку initData.
     const initData = window.Telegram?.WebApp?.initData;
-    if (!initData) {
-      setErrorDetails("Не удалось получить данные Telegram. Откройте приложение через Telegram.");
-      setStatus('error');
-      return;
+    if (!initData || !initData.includes("hash=")) {
+    console.error("❌ Получено initData без hash, вероятно ты смотришь на initDataUnsafe");
     }
 
     const authenticateAndFetchUser = async () => {
       try {
+        console.log("Sending initData to backend:", initData);
+        
         // Шаг 2: Отправляем initData на бэкенд без каких-либо изменений.
         const authApiUrl = `${process.env.NEXT_PUBLIC_API_BASE}/api/auth/telegram`;
         const authRes = await fetch(authApiUrl, {
