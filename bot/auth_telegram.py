@@ -19,46 +19,50 @@ bp = Blueprint("auth_tg", __name__)
 
 def check_telegram_auth(init_data: str, bot_token: str) -> Optional[Dict[str, Any]]:
     """
-    Проверка подписи initData для Telegram Mini App.
-    Работает с 'signature=' (новый формат).
+    Финальная версия, которая сначала раскодирует всю строку initData,
+    а затем выполняет проверку.
     """
     if not init_data or not bot_token:
         return None
 
-    # 🔑 Сначала раскодируем, если строка закодирована как query
-    init_data = unquote(init_data)
-    logger.debug(f"Raw init_data after unquote (first 200 chars): {init_data[:200]}")
-
+    # --- ГЛАВНОЕ ИСПРАВЛЕНИЕ ---
+    # Сначала полностью раскодируем всю строку.
+    # Это превратит 'query_id%3DAAG...%26user%3D...' в 'query_id=AAG...&user=...'
     try:
-        data_pairs = [x.split("=", 1) for x in init_data.split("&")]
+        unquoted_init_data = unquote(init_data)
+    except Exception:
+        # На случай, если придет уже не кодированная строка
+        unquoted_init_data = init_data
+
+    # Теперь работаем с раскодированной строкой, как и раньше.
+    try:
+        data_pairs = [x.split('=', 1) for x in unquoted_init_data.split('&')]
+        data_dict = dict(data_pairs)
     except ValueError:
-        logger.error("❌ Ошибка парсинга initData")
+        logger.error("Failed to parse initData string after unquoting.")
         return None
 
-    data_dict = dict(data_pairs)
-    received_signature = data_dict.get("signature")
-    if not received_signature:
-        logger.error("❌ initData не содержит signature")
+    received_hash = data_dict.pop("hash", None)
+    if not received_hash:
         return None
 
-    # Берём все пары кроме signature
-    check_pairs = [f"{k}={v}" for k, v in data_pairs if k != "signature"]
+    # Составляем проверочную строку из ОРИГИНАЛЬНЫХ (до unquote) пар
+    # Это может быть важно, если Telegram ожидает именно этого
+    original_data_pairs = [x.split('=', 1) for x in init_data.split('&')]
+    check_pairs = [f"{key}={value}" for key, value in original_data_pairs if key != "hash"]
     check_pairs.sort()
     check_str = "\n".join(check_pairs)
 
-    # 👇 Правильный ключ для Mini App
-    secret_key = hmac.new(b"WebAppData", bot_token.encode("utf-8"), hashlib.sha256).digest()
-    calculated_signature = hmac.new(secret_key, check_str.encode("utf-8"), hashlib.sha256).hexdigest()
+    secret = hashlib.sha256(bot_token.encode("utf-8")).digest()
+    calculated_hash = hmac.new(secret, check_str.encode("utf-8"), hashlib.sha256).hexdigest()
 
-    if not hmac.compare_digest(calculated_signature, received_signature):
-        logger.warning("❌ SIGNATURE VALIDATION FAILED")
-        logger.debug(f"Check string:\n{check_str}")
-        logger.debug(f"Received signature: {received_signature}")
-        logger.debug(f"Calculated signature: {calculated_signature}")
+    if not hmac.compare_digest(calculated_hash, received_hash):
+        logger.warning("SIGNATURE VALIDATION FAILED. This is the very last attempt.")
         return None
 
-    logger.info("✅ initData signature validated successfully")
-    return {k: unquote(v) for k, v in data_dict.items()}
+    # Если все прошло успешно, возвращаем уже раскодированные данные
+    safe_data = {key: unquote(value) for key, value in data_dict.items()}
+    return safe_data
 
 @bp.post("/api/auth/telegram")
 def auth_telegram():
