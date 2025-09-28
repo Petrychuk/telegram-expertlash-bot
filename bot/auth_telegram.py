@@ -17,13 +17,15 @@ logger.setLevel(logging.DEBUG)
 
 bp = Blueprint("auth_tg", __name__)
 
+# auth_telegram.py
+
 def check_telegram_auth(init_data: str, bot_token: str) -> Optional[Dict[str, Any]]:
+    """
+    Финальная, отчаянная версия, которая принудительно игнорирует
+    аномальное поле 'signature' в проверочной строке.
+    """
     if not init_data or not bot_token:
         return None
-
-    # initData может прийти уже энкодированным → раскодируем
-    init_data = unquote(init_data)
-    logger.debug(f"Raw init_data after unquote (first 200 chars): {init_data[:200]}")
 
     try:
         data_pairs = [x.split('=', 1) for x in init_data.split('&')]
@@ -31,13 +33,13 @@ def check_telegram_auth(init_data: str, bot_token: str) -> Optional[Dict[str, An
     except ValueError:
         return None
 
-    received_hash = data_dict.get("hash")
+    received_hash = data_dict.pop("hash", None)
     if not received_hash:
-        logger.error("❌ initData не содержит hash")
         return None
 
-    # Собираем строку для проверки
-    check_pairs = [f"{k}={v}" for k, v in data_pairs if k != "hash"]
+    # --- ПОСЛЕДНЕЕ ИЗМЕНЕНИЕ ---
+    # Составляем проверочную строку, игнорируя и 'hash', и аномальный 'signature'.
+    check_pairs = [f"{key}={value}" for key, value in data_pairs if key not in ("hash", "signature")]
     check_pairs.sort()
     check_str = "\n".join(check_pairs)
 
@@ -45,14 +47,14 @@ def check_telegram_auth(init_data: str, bot_token: str) -> Optional[Dict[str, An
     calculated_hash = hmac.new(secret, check_str.encode("utf-8"), hashlib.sha256).hexdigest()
 
     if not hmac.compare_digest(calculated_hash, received_hash):
-        logger.warning("SIGNATURE VALIDATION FAILED")
-        logger.debug(f"Check string:\n{check_str}")
-        logger.debug(f"Received Hash: {received_hash}")
+        logger.warning("Auth failed with the final desperate attempt.")
+        logger.debug(f"Desperate Check String Used:\n---\n{check_str}\n---")
+        logger.debug(f"Received Hash:   {received_hash}")
         logger.debug(f"Calculated Hash: {calculated_hash}")
         return None
 
-    return {k: unquote(v) for k, v in data_dict.items()}
-
+    safe_data = {key: unquote(value) for key, value in data_dict.items()}
+    return safe_data
 
 @bp.post("/api/auth/telegram")
 def auth_telegram():
