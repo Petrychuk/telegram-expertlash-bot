@@ -20,20 +20,23 @@ bp = Blueprint("auth_tg", __name__)
 def check_telegram_auth(init_data: str, bot_token: str) -> Optional[Dict[str, Any]]:
     if not init_data or not bot_token:
         return None
+
+    logger.debug(f"Raw init_data received (first 200 chars): {init_data[:200]}")
+
     try:
         data_pairs = [x.split('=', 1) for x in init_data.split('&')]
     except ValueError:
         return None
 
-    # Словарь для дальнейшего использования
     data_dict = dict(data_pairs)
 
     received_hash = data_dict.get("hash")
     if not received_hash:
+        logger.error("❌ initData не содержит hash (возможно вместо него signature)")
         return None
 
-    # Берём все пары, кроме hash, в виде "ключ=значение"
-    check_pairs = [f"{k}={v}" for k, v in data_pairs if k != "hash"]
+    # Берём все пары кроме hash (и на всякий случай signature)
+    check_pairs = [f"{k}={v}" for k, v in data_pairs if k not in ("hash", "signature")]
     check_pairs.sort()
     check_str = "\n".join(check_pairs)
 
@@ -47,7 +50,6 @@ def check_telegram_auth(init_data: str, bot_token: str) -> Optional[Dict[str, An
         logger.debug(f"Calculated Hash: {calculated_hash}")
         return None
 
-    # Возвращаем safe-decoded словарь
     return {k: unquote(v) for k, v in data_dict.items()}
 
 @bp.post("/api/auth/telegram")
