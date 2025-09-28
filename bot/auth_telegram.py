@@ -22,15 +22,18 @@ def check_telegram_auth(init_data: str, bot_token: str) -> Optional[Dict[str, An
         return None
     try:
         data_pairs = [x.split('=', 1) for x in init_data.split('&')]
-        data_dict = dict(data_pairs)
     except ValueError:
         return None
 
-    received_hash = data_dict.pop("hash", None)
+    # Словарь для дальнейшего использования
+    data_dict = dict(data_pairs)
+
+    received_hash = data_dict.get("hash")
     if not received_hash:
         return None
 
-    check_pairs = [f"{key}={value}" for key, value in data_pairs if key != "hash"]
+    # Берём все пары, кроме hash, в виде "ключ=значение"
+    check_pairs = [f"{k}={v}" for k, v in data_pairs if k != "hash"]
     check_pairs.sort()
     check_str = "\n".join(check_pairs)
 
@@ -38,15 +41,14 @@ def check_telegram_auth(init_data: str, bot_token: str) -> Optional[Dict[str, An
     calculated_hash = hmac.new(secret, check_str.encode("utf-8"), hashlib.sha256).hexdigest()
 
     if not hmac.compare_digest(calculated_hash, received_hash):
-        # --- ДЕТАЛЬНАЯ ОТЛАДКА В СЛУЧАЕ ПРОВАЛА ---
-        logger.warning("SIGNATURE VALIDATION FAILED:")
-        logger.debug(f"==> Check String Used:\n---\n{check_str}\n---")
-        logger.debug(f"==> Received Hash:   {received_hash}")
-        logger.debug(f"==> Calculated Hash: {calculated_hash}")
+        logger.warning("SIGNATURE VALIDATION FAILED")
+        logger.debug(f"Check string:\n{check_str}")
+        logger.debug(f"Received Hash: {received_hash}")
+        logger.debug(f"Calculated Hash: {calculated_hash}")
         return None
 
-    safe_data = {key: unquote(value) for key, value in data_dict.items()}
-    return safe_data
+    # Возвращаем safe-decoded словарь
+    return {k: unquote(v) for k, v in data_dict.items()}
 
 @bp.post("/api/auth/telegram")
 def auth_telegram():
