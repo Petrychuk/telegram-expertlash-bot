@@ -1,4 +1,3 @@
-// webapp/src/components/AuthGate.jsx
 "use client";
 import { useEffect, useState } from "react";
 import { useAuth } from "@/context/AuthContext";
@@ -6,87 +5,81 @@ import { usePathname, useRouter } from 'next/navigation';
 
 export default function AuthGate({ children }) {
   const { user, setUser } = useAuth();
-  const [status, setStatus] = useState("loading"); // 'loading', 'error', 'success'
+  const [status, setStatus] = useState("loading");
   const [errorDetails, setErrorDetails] = useState("");
 
   const router = useRouter();
   const pathname = usePathname();
 
-useEffect(() => {
-  // Если мы на странице ошибки или пользователь уже есть, ничего не делаем.
-  if (pathname === '/access-denied' || user) {
-    setStatus('success');
-    return;
-  }
-
-  // --- Шаг 1. Получаем initData ---
-  let initData = window.Telegram?.WebApp?.initData || "";
-
-  // Fallback: Telegram Desktop иногда кладёт initData в query-параметр tgWebAppData
-  if (!initData || !initData.includes("hash=")) {
-    const params = new URLSearchParams(window.location.search);
-    const fallback = params.get("tgWebAppData");
-    if (fallback) {
-      console.warn("⚠️ Использую tgWebAppData из URL вместо initData");
-      initData = fallback;
-    }
-  }
-
-  if (!initData || !initData.includes("hash=")) {
-    console.error("❌ initData не содержит hash (Telegram не передал данные).");
-    setErrorDetails("Telegram не передал данные авторизации.");
-    setStatus('error');
-    return;
-  }
-
-  const authenticateAndFetchUser = async () => {
-    try {
-      console.log("➡️ Отправляю initData на бэкенд:", initData);
-
-      // --- Шаг 2. Аутентификация ---
-      const authApiUrl = `${process.env.NEXT_PUBLIC_API_BASE}/api/auth/telegram`;
-      const authRes = await fetch(authApiUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ init_data: initData }),
-      });
-
-      if (!authRes.ok) {
-        const errorData = await authRes.json().catch(() => ({ error: `Authentication failed with status: ${authRes.status}` }));
-        throw new Error(errorData.error || 'unknown_auth_error');
-      }
-
-      // --- Шаг 3. Запрос профиля ---
-      const meApiUrl = `${process.env.NEXT_PUBLIC_API_BASE}/api/auth/me`;
-      const meRes = await fetch(meApiUrl); // куки придут автоматически
-      if (!meRes.ok) {
-        const errorData = await meRes.json().catch(() => ({ error: `Profile fetch failed with status: ${meRes.status}` }));
-        throw new Error(errorData.error || 'unknown_profile_error');
-      }
-
-      const userData = await meRes.json();
-
-      // --- Шаг 4. Проверяем подписку ---
-      if (!userData.user || !userData.user.hasSubscription) {
-        router.push('/access-denied');
-        return;
-      }
-
-      // --- Шаг 5. Сохраняем пользователя ---
-      setUser(userData.user);
+  useEffect(() => {
+    if (pathname === '/access-denied' || user) {
       setStatus('success');
-
-    } catch (e) {
-      setErrorDetails(e.message);
-      setStatus('error');
+      return;
     }
-  };
 
-  authenticateAndFetchUser();
+    let initData = window.Telegram?.WebApp?.initData || "";
 
-}, [pathname, router, setUser, user]);
+    if (!initData || !initData.includes("hash=")) {
+      const params = new URLSearchParams(window.location.search);
+      const fallback = params.get("tgWebAppData");
+      if (fallback) {
+        console.warn("⚠️ Использую tgWebAppData из URL вместо initData");
+        initData = fallback;
+      }
+    }
 
-  // --- Логика отображения ---
+    if (!initData || !initData.includes("hash=")) {
+      console.error("❌ initData не содержит hash");
+      setErrorDetails("Telegram не передал данные авторизации.");
+      setStatus('error');
+      return;
+    }
+
+    const authenticateAndFetchUser = async () => {
+      try {
+        console.log("➡️ Отправляю initData на бэкенд:", initData);
+
+        const authApiUrl = `${process.env.NEXT_PUBLIC_API_BASE}/api/auth/telegram`;
+        const authRes = await fetch(authApiUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ init_data: encodeURIComponent(initData) }), // важно!
+        });
+
+        if (authRes.status === 403) {
+          // нет подписки — редиректим
+          router.push('/access-denied');
+          return;
+        }
+
+        if (!authRes.ok) {
+          const errorData = await authRes.json().catch(() => ({ error: `Auth failed: ${authRes.status}` }));
+          throw new Error(errorData.error || 'unknown_auth_error');
+        }
+
+        // если аутентификация успешна — грузим профиль
+        const meApiUrl = `${process.env.NEXT_PUBLIC_API_BASE}/api/auth/me`;
+        const meRes = await fetch(meApiUrl);
+
+        if (!meRes.ok) {
+          const errorData = await meRes.json().catch(() => ({ error: `Profile fetch failed: ${meRes.status}` }));
+          throw new Error(errorData.error || 'unknown_profile_error');
+        }
+
+        const userData = await meRes.json();
+        setUser(userData.user);
+        setStatus('success');
+
+      } catch (e) {
+        setErrorDetails(e.message);
+        setStatus('error');
+      }
+    };
+
+    authenticateAndFetchUser();
+
+  }, [pathname, router, setUser, user]);
+
   if (status === 'loading') {
     return <div className="flex items-center justify-center h-screen">Аутентификация...</div>;
   }
@@ -103,6 +96,5 @@ useEffect(() => {
     );
   }
 
-  // Если статус 'success', показываем дочерний компонент.
   return children;
 }

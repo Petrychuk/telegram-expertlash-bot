@@ -9,8 +9,8 @@ import AuthGate from "@/components/AuthGate"; // <-- ИМПОРТИРУЕМ Auth
 const inter = Inter({ subsets: ['latin'] });
 
 export const metadata = {
-  title: "ExpertLash — education online platform",
-  description: "Эксклюзивный курс по наращиванию ресниц",
+  title: "ExpertLash — piattaforma educativa online",
+  description: "Corso esclusivo di extension ciglia",
 };
 
 export default function RootLayout({ children }) {
