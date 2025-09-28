@@ -20,8 +20,8 @@ bp = Blueprint("auth_tg", __name__)
 def check_telegram_auth(init_data: str, bot_token: str) -> Optional[Dict[str, Any]]:
     """
     Проверка подписи initData для Telegram Mini App.
-    Алгоритм из документации:
-    https://core.telegram.org/bots/webapps#validating-data-received-via-the-mini-app
+    Для WebApp используется поле 'signature', а не 'hash'.
+    Алгоритм: https://core.telegram.org/bots/webapps#validating-data-received-via-the-mini-app
     """
     if not init_data or not bot_token:
         return None
@@ -35,25 +35,25 @@ def check_telegram_auth(init_data: str, bot_token: str) -> Optional[Dict[str, An
         return None
 
     data_dict = dict(data_pairs)
-    received_hash = data_dict.get("hash")
-    if not received_hash:
-        logger.error("❌ initData не содержит hash")
+    received_signature = data_dict.get("signature")
+    if not received_signature:
+        logger.error("❌ initData не содержит signature")
         return None
 
-    # Берём все пары кроме hash
-    check_pairs = [f"{k}={v}" for k, v in data_pairs if k != "hash"]
+    # Берём все пары кроме signature
+    check_pairs = [f"{k}={v}" for k, v in data_pairs if k != "signature"]
     check_pairs.sort()
     check_str = "\n".join(check_pairs)
 
-    # 👇 ВАЖНО: для Mini App секрет формируется иначе, чем в Login Widget
+    # 👇 Правильный ключ для Mini App
     secret_key = hmac.new(b"WebAppData", bot_token.encode("utf-8"), hashlib.sha256).digest()
-    calculated_hash = hmac.new(secret_key, check_str.encode("utf-8"), hashlib.sha256).hexdigest()
+    calculated_signature = hmac.new(secret_key, check_str.encode("utf-8"), hashlib.sha256).hexdigest()
 
-    if not hmac.compare_digest(calculated_hash, received_hash):
+    if not hmac.compare_digest(calculated_signature, received_signature):
         logger.warning("❌ SIGNATURE VALIDATION FAILED")
         logger.debug(f"Check string:\n{check_str}")
-        logger.debug(f"Received Hash: {received_hash}")
-        logger.debug(f"Calculated Hash: {calculated_hash}")
+        logger.debug(f"Received signature: {received_signature}")
+        logger.debug(f"Calculated signature: {calculated_signature}")
         return None
 
     logger.info("✅ initData signature validated successfully")
