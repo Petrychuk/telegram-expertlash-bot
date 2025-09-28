@@ -20,13 +20,14 @@ bp = Blueprint("auth_tg", __name__)
 def check_telegram_auth(init_data: str, bot_token: str) -> Optional[Dict[str, Any]]:
     """
     Проверка подписи initData для Telegram Mini App.
-    Для WebApp используется поле 'signature', а не 'hash'.
-    Алгоритм: https://core.telegram.org/bots/webapps#validating-data-received-via-the-mini-app
+    Работает с 'signature=' (новый формат).
     """
     if not init_data or not bot_token:
         return None
 
-    logger.debug(f"Raw init_data received (first 200 chars): {init_data[:200]}")
+    # 🔑 Сначала раскодируем, если строка закодирована как query
+    init_data = unquote(init_data)
+    logger.debug(f"Raw init_data after unquote (first 200 chars): {init_data[:200]}")
 
     try:
         data_pairs = [x.split("=", 1) for x in init_data.split("&")]

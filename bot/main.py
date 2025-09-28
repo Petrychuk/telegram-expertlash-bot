@@ -181,7 +181,6 @@ async def group_webapp(msg: types.Message):
     except Exception:
         pass
 
-# 7. Старт онбординга
 # 7. Старт онбординга (ФИНАЛЬНАЯ ВЕРСИЯ)
 @dp.message_handler(commands=["start"], state="*", chat_type=types.ChatType.PRIVATE)
 async def cmd_start(msg: types.Message, state: FSMContext):
@@ -498,12 +497,8 @@ async def process_payment_method(c: types.CallbackQuery, state: FSMContext):
                     f"❌ Errore durante la creazione del pagamento: {result.get('error', 'sconosciuto')}\n\n"
                     "Riprova oppure scegli un altro metodo di pagamento."
                 )
-
-    finally:
-        # Закрываем сессию БД ОДИН РАЗ в конце, независимо от результата
+    finally:        
         db.close()
-
-    # Завершаем состояние и отвечаем на callback
     await state.finish()
     await c.answer()
     
@@ -516,13 +511,17 @@ async def restart_onboarding(msg: types.Message, state: FSMContext):
 @dp.message_handler(text="⭐ Recensioni", state="*", chat_type=types.ChatType.PRIVATE)
 async def show_reviews(msg: types.Message):
     await msg.answer("⭐ <b>Recensioni reali delle nostre studentesse:</b>")
-    for i, (key, file_id) in enumerate(VIDEO_REVIEWS.items(), 1):
-        await send_video_or_placeholder(
-            msg,
-            file_id,
-            f"Recensione {i}",
-            f"Recensione della studentessa n.{i}"
-        )
+    
+    if VIDEO_REVIEWS and isinstance(VIDEO_REVIEWS, dict):
+        for i, (key, file_id) in enumerate(VIDEO_REVIEWS.items(), 1):
+            await send_video_or_placeholder(
+                msg,
+                file_id,
+                f"Recensione {i}",
+                f"Recensione della studentessa n.{i}"
+            )
+    else:
+        await msg.answer("<i>Al momento non ci sono recensioni video, ma appariranno presto!</i>")
 
 # 17. Обработка кнопки "Консультация"
 @dp.message_handler(text="📞 Consulenza", state="*", chat_type=types.ChatType.PRIVATE)
