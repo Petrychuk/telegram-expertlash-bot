@@ -32,13 +32,13 @@ export default function AuthGate({ children }) {
         
         // --- ГЛАВНОЕ ИЗМЕНЕНИЕ №1: Добавляем credentials: 'include' ---
         const commonFetchOptions = {
-          method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           credentials: 'include', // <--- ЭТО ЗАСТАВИТ БРАУЗЕР ОТПРАВЛЯТЬ COOKIE
         };
 
         const authRes = await fetch(authApiUrl, {
           ...commonFetchOptions,
+          method: 'POST',
           body: JSON.stringify({ init_data: initData }), 
         });
 
@@ -54,7 +54,10 @@ export default function AuthGate({ children }) {
 
         // --- ГЛАВНОЕ ИЗМЕНЕНИЕ №2: Используем credentials: 'include' и для /me ---
         const meApiUrl = `${process.env.NEXT_PUBLIC_API_BASE}/api/auth/me`;
-        const meRes = await fetch(meApiUrl, { credentials: 'include' }); // <--- И ЗДЕСЬ ТОЖЕ
+        const meRes = await fetch(meApiUrl, { 
+            method: 'GET', // Указываем метод явно
+            ...commonFetchOptions 
+        });
 
         if (!meRes.ok) {
           const errorData = await meRes.json().catch(() => ({ error: `Profile fetch failed: ${meRes.status}` }));
