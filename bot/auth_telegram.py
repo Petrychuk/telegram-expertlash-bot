@@ -17,52 +17,55 @@ logger.setLevel(logging.DEBUG)
 
 bp = Blueprint("auth_tg", __name__)
 
+# auth_telegram.py
+
 def check_telegram_auth(init_data: str, bot_token: str) -> Optional[Dict[str, Any]]:
     """
-    Финальная версия, которая сначала раскодирует всю строку initData,
-    а затем выполняет проверку.
+    ФИНАЛЬНАЯ, САМАЯ ЧИСТАЯ ВЕРСИЯ.
+    1. Раскодирует строку ОДИН РАЗ.
+    2. Работает только с раскодированными данными.
     """
     if not init_data or not bot_token:
         return None
 
-    # --- ГЛАВНОЕ ИСПРАВЛЕНИЕ ---
-    # Сначала полностью раскодируем всю строку.
-    # Это превратит 'query_id%3DAAG...%26user%3D...' в 'query_id=AAG...&user=...'
+    # Шаг 1: Раскодировать всю строку initData. Это ключевой шаг.
     try:
+        # Превращаем 'query_id%3D...%26user%3D...' в 'query_id=...&user=...'
         unquoted_init_data = unquote(init_data)
-    except Exception:
-        # На случай, если придет уже не кодированная строка
-        unquoted_init_data = init_data
+    except Exception as e:
+        logger.error(f"Failed to unquote initData: {e}")
+        return None
 
-    # Теперь работаем с раскодированной строкой, как и раньше.
+    # Шаг 2: Теперь, когда у нас есть нормальная строка, разбираем ее.
     try:
         data_pairs = [x.split('=', 1) for x in unquoted_init_data.split('&')]
         data_dict = dict(data_pairs)
     except ValueError:
-        logger.error("Failed to parse initData string after unquoting.")
+        logger.error("Failed to parse the unquoted initData string.")
         return None
 
+    # Шаг 3: Извлекаем хэш для проверки.
     received_hash = data_dict.pop("hash", None)
     if not received_hash:
         return None
 
-    # Составляем проверочную строку из ОРИГИНАЛЬНЫХ (до unquote) пар
-    # Это может быть важно, если Telegram ожидает именно этого
-    original_data_pairs = [x.split('=', 1) for x in init_data.split('&')]
-    check_pairs = [f"{key}={value}" for key, value in original_data_pairs if key != "hash"]
-    check_pairs.sort()
+    # Шаг 4: Составляем проверочную строку из раскодированных пар.
+    check_pairs = [f"{key}={value}" for key, value in data_dict.items()]
+    check_pairs.sort()  # Сортируем по ключу.
     check_str = "\n".join(check_pairs)
 
+    # Шаг 5: Хэшируем и сравниваем.
     secret = hashlib.sha256(bot_token.encode("utf-8")).digest()
     calculated_hash = hmac.new(secret, check_str.encode("utf-8"), hashlib.sha256).hexdigest()
 
     if not hmac.compare_digest(calculated_hash, received_hash):
-        logger.warning("SIGNATURE VALIDATION FAILED. This is the very last attempt.")
+        logger.warning("SIGNATURE VALIDATION FAILED on the final clean version.")
         return None
 
-    # Если все прошло успешно, возвращаем уже раскодированные данные
-    safe_data = {key: unquote(value) for key, value in data_dict.items()}
-    return safe_data
+    # Шаг 6: Успех! Возвращаем словарь с уже раскодированными данными.
+    # Нам больше не нужно делать unquote, так как мы работали с unquoted_init_data.
+    return data_dict
+
 
 @bp.post("/api/auth/telegram")
 def auth_telegram():
