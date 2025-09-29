@@ -6,7 +6,7 @@ import time
 import logging
 from typing import Optional, Dict, Any
 import jwt
-from urllib.parse import unquote
+from urllib.parse import unquote, parse_qs
 
 from flask import Blueprint, request, jsonify, current_app, make_response
 from database import get_db, get_user_by_telegram_id, create_user, get_active_subscription, UserRole, User
@@ -16,46 +16,104 @@ bp = Blueprint("auth_tg", __name__)
 
 # ---------------------- Подпись initData ----------------------
 def check_telegram_auth(init_data: str, bot_token: str) -> Optional[Dict[str, Any]]:
-   
+    """
+    Проверяет подпись Telegram WebApp initData
+    Исправленная версия с правильным порядком операций
+    """
     if not init_data or not bot_token:
         logger.error("❌ Нет init_data или bot_token")
         return None
 
     try:
-        data_pairs = [x.split("=", 1) for x in init_data.split("&")]
-        data_dict = dict(data_pairs)
-    except Exception as e:
-        logger.error(f"Ошибка парсинга initData: {e}")
-        return None
-
-    received_hash = data_dict.pop("hash", None)
-    if not received_hash:
-        logger.error("❌ initData не содержит hash")
-        return None
-
-    # Собираем строку для проверки
-    check_pairs = [f"{k}={v}" for k, v in data_dict.items()]
-    check_pairs.sort()
-    check_str = "\n".join(check_pairs)
-
-    # 1. sha256(bot_token)
-    secret = hashlib.sha256(bot_token.encode()).digest()
-
-    # 2. hmac("WebAppData", secret)
-    secret_key = hmac.new("WebAppData".encode(), secret, hashlib.sha256).digest()
-
-    # 3. hmac(check_str, secret_key)
-    calculated_hash = hmac.new(secret_key, check_str.encode(), hashlib.sha256).hexdigest()
-
-    if not hmac.compare_digest(calculated_hash, received_hash):
-        logger.warning("❌ SIGNATURE VALIDATION FAILED")
+        # Добавляем отладочную информацию
+        logger.debug(f"Raw init_data: {init_data}")
+        logger.debug(f"BOT_TOKEN length: {len(bot_token)}")
+        
+        # Разбиваем строку на пары ключ=значение
+        pairs = init_data.split('&')
+        data_dict = {}
+        received_hash = None
+        
+        for pair in pairs:
+            if '=' in pair:
+                key, value = pair.split('=', 1)
+                if key == 'hash':
+                    received_hash = value
+                else:
+                    data_dict[key] = value
+        
+        if not received_hash:
+            logger.error("❌ initData не содержит hash")
+            return None
+        
+        # Создаем строку для проверки (БЕЗ URL-декодирования!)
+        # Сортируем пары по ключам
+        sorted_pairs = sorted(data_dict.items())
+        check_str = '\n'.join([f'{key}={value}' for key, value in sorted_pairs])
+        
         logger.debug(f"Check string:\n{check_str}")
+        
+        # Создаем секретный ключ по алгоритму Telegram
+        # 1. SHA256 от bot_token
+        secret = hashlib.sha256(bot_token.encode()).digest()
+        
+        # 2. HMAC-SHA256("WebAppData", secret)
+        secret_key = hmac.new("WebAppData".encode(), secret, hashlib.sha256).digest()
+        
+        # 3. HMAC-SHA256(check_str, secret_key)
+        calculated_hash = hmac.new(secret_key, check_str.encode(), hashlib.sha256).hexdigest()
+        
         logger.debug(f"Received Hash: {received_hash}")
         logger.debug(f"Calculated Hash: {calculated_hash}")
+        
+        # Сравниваем подписи
+        if not hmac.compare_digest(calculated_hash, received_hash):
+            logger.warning("❌ SIGNATURE VALIDATION FAILED")
+            return None
+        
+        logger.info("✅ Подпись прошла проверку")
+        
+        # Теперь можем декодировать URL-encoded значения
+        result = {}
+        for key, value in data_dict.items():
+            result[key] = unquote(value)
+            
+        return result
+        
+    except Exception as e:
+        logger.error(f"Ошибка при проверке Telegram auth: {e}")
         return None
 
-    logger.info("✅ Подпись прошла проверку")
-    return {k: unquote(v) for k, v in data_dict.items()}
+def validate_auth_date(data_dict: Dict[str, str], max_age: int = 86400) -> bool:
+    """
+    Проверяет, что initData не слишком старые
+    max_age: максимальный возраст в секундах (по умолчанию 24 часа)
+    """
+    auth_date = data_dict.get('auth_date')
+    if not auth_date:
+        logger.warning("❌ auth_date отсутствует в initData")
+        return False
+    
+    try:
+        auth_timestamp = int(auth_date)
+        current_timestamp = int(time.time())
+        age = current_timestamp - auth_timestamp
+        
+        logger.debug(f"Auth date: {auth_timestamp}, Current: {current_timestamp}, Age: {age}s")
+        
+        if age > max_age:
+            logger.warning(f"❌ initData слишком старые: {age}s > {max_age}s")
+            return False
+            
+        if age < -300:  # Разрешаем небольшую разницу во времени (5 минут)
+            logger.warning(f"❌ initData из будущего: {age}s")
+            return False
+            
+        return True
+        
+    except ValueError:
+        logger.error("❌ Некорректный формат auth_date")
+        return False
 
 # ---------------------- /api/auth/telegram ----------------------
 @bp.post("/api/auth/telegram")
@@ -81,12 +139,25 @@ def auth_telegram():
     if not data:
         return jsonify({"error": "bad_signature"}), 401
 
+    # Проверяем время жизни данных
+    if not validate_auth_date(data):
+        return jsonify({"error": "expired_auth_data"}), 401
+
     # Извлекаем пользователя
     try:
-        u = json.loads(data.get("user", "{}")) or {}
-        tg_id = int(u.get("id"))
+        user_json = data.get("user", "{}")
+        logger.debug(f"User JSON: {user_json}")
+        
+        u = json.loads(user_json) if user_json else {}
+        tg_id = int(u.get("id", 0))
+        
+        if not tg_id:
+            logger.error("❌ Не удалось извлечь telegram ID")
+            return jsonify({"error": "no_telegram_id"}), 400
+            
         logger.info(f"User parsed: tg_id={tg_id}")
-    except Exception as e:
+        
+    except (json.JSONDecodeError, ValueError, TypeError) as e:
         logger.error(f"Ошибка парсинга user: {e}")
         return jsonify({"error": "malformed_user"}), 400
 
@@ -131,6 +202,10 @@ def auth_telegram():
         )
         logger.info(f"✅ Успешная авторизация: user_id={user.id}")
         return response
+        
+    except Exception as e:
+        logger.error(f"Ошибка в базе данных: {e}")
+        return jsonify({"error": "database_error"}), 500
     finally:
         db.close()
 
@@ -145,7 +220,8 @@ def get_current_user():
     try:
         payload = jwt.decode(token, jwt_secret, algorithms=["HS256"])
         user_id = int(payload["sub"])
-    except (jwt.ExpiredSignatureError, jwt.InvalidTokenError):
+    except (jwt.ExpiredSignatureError, jwt.InvalidTokenError) as e:
+        logger.warning(f"Invalid token: {e}")
         return jsonify({"error": "bad_token"}), 401
 
     db = next(get_db())
