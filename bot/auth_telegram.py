@@ -12,15 +12,10 @@ from flask import Blueprint, request, jsonify, current_app, make_response
 from database import get_db, get_user_by_telegram_id, create_user, get_active_subscription, UserRole, User
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG) 
-
 bp = Blueprint("auth_tg", __name__)
 
 def check_telegram_auth(init_data: str, bot_token: str) -> Optional[Dict[str, Any]]:
-    """
-    Финальная, самая простая и правильная версия.
-    Работает с "сырой" строкой initData.
-    """
+   
     if not init_data or not bot_token:
         return None
 
@@ -41,11 +36,14 @@ def check_telegram_auth(init_data: str, bot_token: str) -> Optional[Dict[str, An
     check_pairs.sort()
     check_str = "\n".join(check_pairs)
 
-    # Хэшируем и сравниваем
-    secret = hmac.new("WebAppData".encode(), bot_token.encode(), hashlib.sha256).digest()
-    calculated_hash = hmac.new(secret, check_str.encode(), hashlib.sha256).hexdigest()
+    # Секретный ключ генерируется через HMAC, а не простым SHA256.
+    secret_key = hmac.new("WebAppData".encode(), bot_token.encode(), hashlib.sha256).digest()
+    
+    # Хэшируем проверочную строку с этим секретным ключом
+    calculated_hash = hmac.new(secret_key, check_str.encode(), hashlib.sha256).hexdigest()
 
     if not hmac.compare_digest(calculated_hash, received_hash):
+        logger.warning("SIGNATURE VALIDATION FAILED. This should not happen with the correct secret key logic.")
         return None
 
     # Успех! Раскодируем значения для дальнейшего использования.
@@ -54,46 +52,24 @@ def check_telegram_auth(init_data: str, bot_token: str) -> Optional[Dict[str, An
 
 @bp.post("/api/auth/telegram")
 def auth_telegram():
-    logger.info("--- START /api/auth/telegram ---")
     body = request.get_json(silent=True) or {}
     init_data = body.get("init_data", "")
     if not init_data:
-        logger.error("Auth failed: 'init_data' field is missing.")
         return jsonify({"error": "no_init_data"}), 400
 
-    # --- ЛОГИРОВАНИЕ СЕКРЕТОВ ---
     bot_token = current_app.config.get("BOT_TOKEN")
     jwt_secret = current_app.config.get("JWT_SECRET")
 
-    if not bot_token:
-        logger.critical("CRITICAL: BOT_TOKEN is NOT loaded in Flask config!")
-    else:
-        logger.info(f"BOT_TOKEN loaded, preview: {bot_token[:4]}...{bot_token[-4:]}")
-
-    if not jwt_secret:
-        logger.critical("CRITICAL: JWT_SECRET is NOT loaded in Flask config!")
-    else:
-        logger.info(f"JWT_SECRET loaded, preview: {jwt_secret[:4]}...")
-    
-    if not bot_token or not jwt_secret:
-        return jsonify({"error": "server_misconfigured"}), 500
-
-    # --- ПРОВЕРКА ПОДПИСИ ---
-    logger.info("Attempting to validate signature...")
     data = check_telegram_auth(init_data, bot_token)
     if not data:
-        logger.error("Signature validation returned None. Sending 401 bad_signature.")
         return jsonify({"error": "bad_signature"}), 401
 
-    logger.info("✅ Signature is OK! Proceeding...")
+    logger.info("✅✅✅ SIGNATURE IS OK! WE DID IT! ✅✅✅")
 
-    # --- ПРОВЕРКА ПОЛЬЗОВАТЕЛЯ И ПОДПИСКИ ---
     try:
         u = json.loads(data.get("user", "{}")) or {}
         tg_id = int(u.get("id"))
-        logger.info(f"User data parsed, tg_id={tg_id}")
-    except Exception as e:
-        logger.error(f"Failed to parse user data from initData: {e}")
+    except Exception:
         return jsonify({"error": "malformed_user"}), 400
 
     db = next(get_db())
@@ -101,33 +77,25 @@ def auth_telegram():
         user = get_user_by_telegram_id(db, tg_id)
         if not user:
             user = create_user(db, tg_id, username=u.get("username"), first_name=u.get("first_name"), last_name=u.get("last_name"))
-            logger.info(f"Created new user with internal_id={user.id}")
         
         sub = get_active_subscription(db, user.id)
         has_access = (user.role == UserRole.admin) or (sub is not None)
-        logger.info(f"Access check for user_id={user.id}: has_access={has_access}")
         
         if not has_access:
-            logger.warning(f"Access DENIED for user_id={user.id}. No active subscription.")
             return jsonify({"error": "no_subscription"}), 403
 
-        # --- СОЗДАНИЕ JWT ---
         now = int(time.time())
         payload = {"sub": user.id, "iat": now, "exp": now + 60 * 60 * 24 * 7, "role": user.role.value}
         token = jwt.encode(payload, jwt_secret, algorithm="HS256")
-        logger.info(f"JWT created for user_id={user.id}")
 
         response = make_response(jsonify({"status": "success"}))
         response.set_cookie(
             'auth_token', value=token, max_age=60 * 60 * 24 * 7,
             path='/', httponly=True, samesite='Lax'
          )
-        logger.info("Cookie 'auth_token' set. Sending response.")
-        logger.info("--- END /api/auth/telegram ---")
         return response
     finally:
         db.close()
-
 
 @bp.get("/api/auth/me")
 def get_current_user():
@@ -139,7 +107,7 @@ def get_current_user():
     try:
         payload = jwt.decode(token, jwt_secret, algorithms=["HS256"])
         user_id = int(payload["sub"])
-    except (jwt.ExpiredSignatureError, jwt.InvalidTokenError):
+    except Exception:
         return jsonify({"error": "bad_token"}), 401
 
     db = next(get_db())
