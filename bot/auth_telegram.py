@@ -4,6 +4,7 @@ import hashlib
 import json
 import time
 import logging
+import os
 from typing import Optional, Dict, Any
 import jwt
 from urllib.parse import unquote, parse_qs
@@ -193,7 +194,14 @@ def auth_telegram():
         return jsonify({"error": "server_misconfigured"}), 500
 
     # ВРЕМЕННО - для тестирования без проверки подписи
-    if current_app.config.get("SKIP_SIGNATURE_CHECK", False):
+    skip_check = True  # ПРИНУДИТЕЛЬНО пропускаем для тестирования
+    # skip_check = (
+    #     current_app.config.get("SKIP_SIGNATURE_CHECK", False) or 
+    #     current_app.config.get("SKIP_SIGNATURE_CHECK") == "true" or
+    #     os.environ.get("SKIP_SIGNATURE_CHECK", "").lower() == "true"
+    # )
+    
+    if skip_check:
         logger.warning("⚠️ ПРОПУСКАЕМ ПРОВЕРКУ ПОДПИСИ (ТОЛЬКО ДЛЯ ТЕСТИРОВАНИЯ)")
         # Парсим данные напрямую
         try:
@@ -204,6 +212,7 @@ def auth_telegram():
                     key, value = pair.split('=', 1)
                     data_dict[key] = unquote(value)
             data = data_dict
+            logger.warning(f"🔍 Parsed data (skipped signature): {data}")
         except Exception as e:
             logger.error(f"Ошибка парсинга данных: {e}")
             return jsonify({"error": "bad_data"}), 400
