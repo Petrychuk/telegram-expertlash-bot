@@ -13,16 +13,13 @@ export default function AuthGate({ children }) {
   const pathname = usePathname();
 
   useEffect(() => {
-    // Если мы на странице ошибки или пользователь уже есть, ничего не делаем
     if (pathname === '/access-denied' || user) {
       setStatus('success');
       return;
     }
 
-    // Получаем "сырые" данные от Telegram
     const initData = window.Telegram?.WebApp?.initData;
 
-    // Если данных нет, показываем ошибку
     if (!initData) {
       setErrorDetails("Не удалось получить данные Telegram. Откройте приложение через Telegram.");
       setStatus('error');
@@ -33,29 +30,31 @@ export default function AuthGate({ children }) {
       try {
         const authApiUrl = `${process.env.NEXT_PUBLIC_API_BASE}/api/auth/telegram`;
         
-        // --- ГЛАВНОЕ ИСПРАВЛЕНИЕ ---
-        // Отправляем initData "как есть", без encodeURIComponent
-        const authRes = await fetch(authApiUrl, {
+        // --- ГЛАВНОЕ ИЗМЕНЕНИЕ №1: Добавляем credentials: 'include' ---
+        const commonFetchOptions = {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          credentials: 'include', // <--- ЭТО ЗАСТАВИТ БРАУЗЕР ОТПРАВЛЯТЬ COOKIE
+        };
+
+        const authRes = await fetch(authApiUrl, {
+          ...commonFetchOptions,
           body: JSON.stringify({ init_data: initData }), 
         });
 
-        // Если статус 403 - нет подписки, перенаправляем
         if (authRes.status === 403) {
           router.push('/access-denied');
           return;
         }
 
-        // Если любой другой неуспешный статус - показываем ошибку
         if (!authRes.ok) {
           const errorData = await authRes.json().catch(() => ({ error: `Auth failed: ${authRes.status}` }));
           throw new Error(errorData.error || 'unknown_auth_error');
         }
 
-        // Если аутентификация прошла успешно, запрашиваем профиль
+        // --- ГЛАВНОЕ ИЗМЕНЕНИЕ №2: Используем credentials: 'include' и для /me ---
         const meApiUrl = `${process.env.NEXT_PUBLIC_API_BASE}/api/auth/me`;
-        const meRes = await fetch(meApiUrl); // cookie передадутся автоматически
+        const meRes = await fetch(meApiUrl, { credentials: 'include' }); // <--- И ЗДЕСЬ ТОЖЕ
 
         if (!meRes.ok) {
           const errorData = await meRes.json().catch(() => ({ error: `Profile fetch failed: ${meRes.status}` }));
@@ -63,7 +62,7 @@ export default function AuthGate({ children }) {
         }
 
         const userData = await meRes.json();
-        setUser(userData.user); // Сохраняем пользователя в контекст
+        setUser(userData.user);
         setStatus('success');
 
       } catch (e) {
@@ -76,7 +75,7 @@ export default function AuthGate({ children }) {
 
   }, [pathname, router, setUser, user]);
 
-  // --- Рендер компонента (без изменений) ---
+  // Рендер без изменений
   if (status === 'loading') {
     return <div className="flex items-center justify-center h-screen">Аутентификация...</div>;
   }
