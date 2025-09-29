@@ -9,10 +9,11 @@ from datetime import datetime
 from flask import Flask, request, jsonify, current_app 
 from auth_telegram import bp as tg_bp
 from flask_cors import CORS
+from functools import wraps
 
 # --- Импорты из ваших модулей (очищены от дублей) ---
 from payment_service import verify_stripe_webhook, verify_paypal_webhook
-from database import get_db, activate_subscription, cancel_subscription, list_modules_for_user, User
+from database import get_db, activate_subscription, cancel_subscription, list_modules_for_user, User, Module
 from telegram_service import TelegramService
 
 # --- Инициализация ---
@@ -42,6 +43,39 @@ logger = logging.getLogger(__name__)
 def run_async_in_thread(coro):
     """Запускает асинхронную задачу в отдельном потоке."""
     threading.Thread(target=lambda: asyncio.run(coro), daemon=True).start()
+    
+# --- Декоратор для проверки JWT-токена ---
+def token_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        token = request.cookies.get('auth_token')
+        if not token:
+            return jsonify({"error": "token_missing"}), 401
+        try:
+            jwt_secret = current_app.config.get("JWT_SECRET")
+            payload = jwt.decode(token, jwt_secret, algorithms=["HS256"])
+            kwargs['current_user_id'] = payload['sub']
+        except (jwt.ExpiredSignatureError, jwt.InvalidTokenError):
+            return jsonify({"error": "bad_token"}), 401
+        return f(*args, **kwargs)
+    return decorated
+
+# --- Эндпоинт для получения модулей ---
+@app.route("/api/modules", methods=['GET']) # <-- Регистрируем прямо на app
+@token_required
+def get_all_modules(current_user_id):
+    db = next(get_db())
+    try:
+        modules = db.query(Module).order_by(Module.position.asc()).all()
+        result = [
+            {
+                "id": m.id, "slug": m.slug, "title": m.title,
+                "description": m.description, "position": m.position, "is_free": m.is_free
+            } for m in modules
+        ]
+        return jsonify(result)
+    finally:
+        db.close()
 
 # === Вебхук Stripe: ===
 @app.route('/webhook/stripe', methods=['POST'])
