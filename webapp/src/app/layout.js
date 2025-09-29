@@ -18,7 +18,7 @@ export default function RootLayout({ children }) {
     <html lang="it" suppressHydrationWarning> 
       <body className={`${inter.className} bg-gray-50`}>
         <Script
-          src="https://telegram.org/js/telegram-web-app.js"
+          src="https://telegram.org/js/telegram-web-app.js?59"
           strategy="beforeInteractive" // Ускоряем загрузку скрипта Telegram
         />
         <AuthProvider>
