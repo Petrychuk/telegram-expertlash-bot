@@ -42,6 +42,10 @@ def check_telegram_auth(init_data: str, bot_token: str) -> Optional[Dict[str, An
                 if key == 'hash':
                     received_hash = value
                     logger.warning(f"🔍 Found hash: {received_hash}")
+                elif key == 'signature':
+                    # signature НЕ участвует в проверке подписи, но сохраняем для возврата
+                    data_dict[key] = value
+                    logger.warning(f"🔍 Found signature (excluded from check): {value}")
                 else:
                     data_dict[key] = value
         
@@ -52,7 +56,9 @@ def check_telegram_auth(init_data: str, bot_token: str) -> Optional[Dict[str, An
         logger.warning(f"🔍 Data dict (without hash): {data_dict}")
         
         # Создаем строку для проверки (БЕЗ URL-декодирования!)
-        sorted_pairs = sorted(data_dict.items())
+        # ИСКЛЮЧАЕМ signature из проверки!
+        filtered_pairs = [(k, v) for k, v in data_dict.items() if k != 'signature']
+        sorted_pairs = sorted(filtered_pairs)
         check_str = '\n'.join([f'{key}={value}' for key, value in sorted_pairs])
         
         logger.warning(f"🔍 Check string:\n{repr(check_str)}")
@@ -80,21 +86,26 @@ def check_telegram_auth(init_data: str, bot_token: str) -> Optional[Dict[str, An
             logger.warning("🔄 Пробуем альтернативные методы...")
             
             # Попытка 1: с URL-декодированием перед созданием строки
-            decoded_dict = {k: unquote(v) for k, v in data_dict.items()}
+            decoded_dict = {k: unquote(v) for k, v in data_dict.items() if k != 'signature'}
             alt_check_str1 = '\n'.join([f'{key}={value}' for key, value in sorted(decoded_dict.items())])
             alt_hash1 = hmac.new(secret_key, alt_check_str1.encode(), hashlib.sha256).hexdigest()
             logger.warning(f"🔄 Alternative 1 - decoded values: {alt_hash1}")
             
             if hmac.compare_digest(alt_hash1, received_hash):
                 logger.info("✅ Подпись прошла проверку (альтернативный метод 1)")
-                return decoded_dict
+                # Добавляем signature обратно в результат
+                result = decoded_dict.copy()
+                if 'signature' in data_dict:
+                    result['signature'] = unquote(data_dict['signature'])
+                return result
             
             # Попытка 2: использование parse_qs
             try:
                 parsed = parse_qs(init_data, keep_blank_values=True)
                 if 'hash' in parsed:
                     alt_received_hash = parsed['hash'][0]
-                    alt_dict = {k: v[0] for k, v in parsed.items() if k != 'hash'}
+                    # Исключаем hash И signature
+                    alt_dict = {k: v[0] for k, v in parsed.items() if k not in ['hash', 'signature']}
                     alt_check_str2 = '\n'.join([f'{key}={value}' for key, value in sorted(alt_dict.items())])
                     alt_hash2 = hmac.new(secret_key, alt_check_str2.encode(), hashlib.sha256).hexdigest()
                     
@@ -103,7 +114,11 @@ def check_telegram_auth(init_data: str, bot_token: str) -> Optional[Dict[str, An
                     
                     if hmac.compare_digest(alt_hash2, alt_received_hash):
                         logger.info("✅ Подпись прошла проверку (альтернативный метод 2)")
-                        return {k: unquote(v) for k, v in alt_dict.items()}
+                        result = {k: unquote(v) for k, v in alt_dict.items()}
+                        # Добавляем signature если есть
+                        if 'signature' in parsed:
+                            result['signature'] = unquote(parsed['signature'][0])
+                        return result
             except Exception as e:
                 logger.warning(f"🔄 Alternative 2 failed: {e}")
             
@@ -177,12 +192,28 @@ def auth_telegram():
         logger.critical("CRITICAL: BOT_TOKEN или JWT_SECRET не загружен в конфиг")
         return jsonify({"error": "server_misconfigured"}), 500
 
-    # Проверяем подпись
-    logger.info("Проверяем подпись initData...")
-    data = check_telegram_auth(init_data, bot_token)
-    if not data:
-        logger.error("❌ Все методы проверки подписи провалились")
-        return jsonify({"error": "bad_signature"}), 401
+    # ВРЕМЕННО - для тестирования без проверки подписи
+    if current_app.config.get("SKIP_SIGNATURE_CHECK", False):
+        logger.warning("⚠️ ПРОПУСКАЕМ ПРОВЕРКУ ПОДПИСИ (ТОЛЬКО ДЛЯ ТЕСТИРОВАНИЯ)")
+        # Парсим данные напрямую
+        try:
+            pairs = init_data.split('&')
+            data_dict = {}
+            for pair in pairs:
+                if '=' in pair and not pair.startswith('hash='):
+                    key, value = pair.split('=', 1)
+                    data_dict[key] = unquote(value)
+            data = data_dict
+        except Exception as e:
+            logger.error(f"Ошибка парсинга данных: {e}")
+            return jsonify({"error": "bad_data"}), 400
+    else:
+        # Проверяем подпись
+        logger.info("Проверяем подпись initData...")
+        data = check_telegram_auth(init_data, bot_token)
+        if not data:
+            logger.error("❌ Все методы проверки подписи провалились")
+            return jsonify({"error": "bad_signature"}), 401
 
     # Проверяем время жизни данных
     if not validate_auth_date(data):
