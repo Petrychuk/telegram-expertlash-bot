@@ -18,27 +18,30 @@ bp = Blueprint("auth_tg", __name__)
 def check_telegram_auth(init_data: str, bot_token: str) -> Optional[Dict[str, Any]]:
     """
     Проверяет подпись Telegram WebApp initData
-    Исправленная версия с правильным порядком операций
     """
     if not init_data or not bot_token:
         logger.error("❌ Нет init_data или bot_token")
         return None
 
     try:
-        # Добавляем отладочную информацию
-        logger.debug(f"Raw init_data: {init_data}")
-        logger.debug(f"BOT_TOKEN length: {len(bot_token)}")
+        # ДЕТАЛЬНОЕ ЛОГИРОВАНИЕ ДЛЯ ОТЛАДКИ
+        logger.warning(f"🔍 Raw init_data: {init_data}")
+        logger.warning(f"🔍 BOT_TOKEN first 10 chars: {bot_token[:10]}...")
+        logger.warning(f"🔍 BOT_TOKEN length: {len(bot_token)}")
         
         # Разбиваем строку на пары ключ=значение
         pairs = init_data.split('&')
         data_dict = {}
         received_hash = None
         
+        logger.warning(f"🔍 Parsed pairs: {pairs}")
+        
         for pair in pairs:
             if '=' in pair:
                 key, value = pair.split('=', 1)
                 if key == 'hash':
                     received_hash = value
+                    logger.warning(f"🔍 Found hash: {received_hash}")
                 else:
                     data_dict[key] = value
         
@@ -46,34 +49,69 @@ def check_telegram_auth(init_data: str, bot_token: str) -> Optional[Dict[str, An
             logger.error("❌ initData не содержит hash")
             return None
         
+        logger.warning(f"🔍 Data dict (without hash): {data_dict}")
+        
         # Создаем строку для проверки (БЕЗ URL-декодирования!)
-        # Сортируем пары по ключам
         sorted_pairs = sorted(data_dict.items())
         check_str = '\n'.join([f'{key}={value}' for key, value in sorted_pairs])
         
-        logger.debug(f"Check string:\n{check_str}")
+        logger.warning(f"🔍 Check string:\n{repr(check_str)}")
         
         # Создаем секретный ключ по алгоритму Telegram
         # 1. SHA256 от bot_token
         secret = hashlib.sha256(bot_token.encode()).digest()
+        logger.warning(f"🔍 Secret (hex): {secret.hex()[:20]}...")
         
         # 2. HMAC-SHA256("WebAppData", secret)
         secret_key = hmac.new("WebAppData".encode(), secret, hashlib.sha256).digest()
+        logger.warning(f"🔍 Secret key (hex): {secret_key.hex()[:20]}...")
         
         # 3. HMAC-SHA256(check_str, secret_key)
         calculated_hash = hmac.new(secret_key, check_str.encode(), hashlib.sha256).hexdigest()
         
-        logger.debug(f"Received Hash: {received_hash}")
-        logger.debug(f"Calculated Hash: {calculated_hash}")
+        logger.warning(f"🔍 Received Hash: {received_hash}")
+        logger.warning(f"🔍 Calculated Hash: {calculated_hash}")
         
         # Сравниваем подписи
         if not hmac.compare_digest(calculated_hash, received_hash):
             logger.warning("❌ SIGNATURE VALIDATION FAILED")
+            
+            # Дополнительные попытки с различными вариантами
+            logger.warning("🔄 Пробуем альтернативные методы...")
+            
+            # Попытка 1: с URL-декодированием перед созданием строки
+            decoded_dict = {k: unquote(v) for k, v in data_dict.items()}
+            alt_check_str1 = '\n'.join([f'{key}={value}' for key, value in sorted(decoded_dict.items())])
+            alt_hash1 = hmac.new(secret_key, alt_check_str1.encode(), hashlib.sha256).hexdigest()
+            logger.warning(f"🔄 Alternative 1 - decoded values: {alt_hash1}")
+            
+            if hmac.compare_digest(alt_hash1, received_hash):
+                logger.info("✅ Подпись прошла проверку (альтернативный метод 1)")
+                return decoded_dict
+            
+            # Попытка 2: использование parse_qs
+            try:
+                parsed = parse_qs(init_data, keep_blank_values=True)
+                if 'hash' in parsed:
+                    alt_received_hash = parsed['hash'][0]
+                    alt_dict = {k: v[0] for k, v in parsed.items() if k != 'hash'}
+                    alt_check_str2 = '\n'.join([f'{key}={value}' for key, value in sorted(alt_dict.items())])
+                    alt_hash2 = hmac.new(secret_key, alt_check_str2.encode(), hashlib.sha256).hexdigest()
+                    
+                    logger.warning(f"🔄 Alternative 2 - parse_qs: {alt_hash2}")
+                    logger.warning(f"🔄 Alternative 2 - check_str: {repr(alt_check_str2)}")
+                    
+                    if hmac.compare_digest(alt_hash2, alt_received_hash):
+                        logger.info("✅ Подпись прошла проверку (альтернативный метод 2)")
+                        return {k: unquote(v) for k, v in alt_dict.items()}
+            except Exception as e:
+                logger.warning(f"🔄 Alternative 2 failed: {e}")
+            
             return None
         
         logger.info("✅ Подпись прошла проверку")
         
-        # Теперь можем декодировать URL-encoded значения
+        # Декодируем URL-encoded значения
         result = {}
         for key, value in data_dict.items():
             result[key] = unquote(value)
@@ -82,12 +120,13 @@ def check_telegram_auth(init_data: str, bot_token: str) -> Optional[Dict[str, An
         
     except Exception as e:
         logger.error(f"Ошибка при проверке Telegram auth: {e}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
         return None
 
 def validate_auth_date(data_dict: Dict[str, str], max_age: int = 86400) -> bool:
     """
     Проверяет, что initData не слишком старые
-    max_age: максимальный возраст в секундах (по умолчанию 24 часа)
     """
     auth_date = data_dict.get('auth_date')
     if not auth_date:
@@ -99,7 +138,7 @@ def validate_auth_date(data_dict: Dict[str, str], max_age: int = 86400) -> bool:
         current_timestamp = int(time.time())
         age = current_timestamp - auth_timestamp
         
-        logger.debug(f"Auth date: {auth_timestamp}, Current: {current_timestamp}, Age: {age}s")
+        logger.warning(f"🔍 Auth date: {auth_timestamp}, Current: {current_timestamp}, Age: {age}s")
         
         if age > max_age:
             logger.warning(f"❌ initData слишком старые: {age}s > {max_age}s")
@@ -122,6 +161,11 @@ def auth_telegram():
 
     body = request.get_json(silent=True) or {}
     init_data = body.get("init_data", "")
+    
+    # ДОПОЛНИТЕЛЬНОЕ ЛОГИРОВАНИЕ
+    logger.warning(f"🔍 Request body keys: {list(body.keys())}")
+    logger.warning(f"🔍 init_data length: {len(init_data)}")
+    
     if not init_data:
         logger.error("❌ init_data отсутствует в body")
         return jsonify({"error": "no_init_data"}), 400
@@ -137,6 +181,7 @@ def auth_telegram():
     logger.info("Проверяем подпись initData...")
     data = check_telegram_auth(init_data, bot_token)
     if not data:
+        logger.error("❌ Все методы проверки подписи провалились")
         return jsonify({"error": "bad_signature"}), 401
 
     # Проверяем время жизни данных
@@ -146,7 +191,7 @@ def auth_telegram():
     # Извлекаем пользователя
     try:
         user_json = data.get("user", "{}")
-        logger.debug(f"User JSON: {user_json}")
+        logger.warning(f"🔍 User JSON: {user_json}")
         
         u = json.loads(user_json) if user_json else {}
         tg_id = int(u.get("id", 0))
@@ -205,6 +250,8 @@ def auth_telegram():
         
     except Exception as e:
         logger.error(f"Ошибка в базе данных: {e}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
         return jsonify({"error": "database_error"}), 500
     finally:
         db.close()
@@ -245,5 +292,8 @@ def get_current_user():
                 "hasSubscription": has_access,
             }
         })
+    except Exception as e:
+        logger.error(f"Error in get_current_user: {e}")
+        return jsonify({"error": "server_error"}), 500
     finally:
         db.close()
