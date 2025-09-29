@@ -15,7 +15,10 @@ logger = logging.getLogger(__name__)
 bp = Blueprint("auth_tg", __name__)
 
 def check_telegram_auth(init_data: str, bot_token: str) -> Optional[Dict[str, Any]]:
-   
+    """
+    ИСТИННО ФИНАЛЬНАЯ ВЕРСИЯ, НАПИСАННАЯ СТРОГО ПО ДОКУМЕНТАЦИИ.
+    Использует правильный метод генерации secret_key.
+    """
     if not init_data or not bot_token:
         return None
 
@@ -36,6 +39,7 @@ def check_telegram_auth(init_data: str, bot_token: str) -> Optional[Dict[str, An
     check_pairs.sort()
     check_str = "\n".join(check_pairs)
 
+    # --- ГЛАВНОЕ ИСПРАВЛЕНИЕ СОГЛАСНО ДОКУМЕНТАЦИИ ---
     # Секретный ключ генерируется через HMAC, а не простым SHA256.
     secret_key = hmac.new("WebAppData".encode(), bot_token.encode(), hashlib.sha256).digest()
     
@@ -49,6 +53,9 @@ def check_telegram_auth(init_data: str, bot_token: str) -> Optional[Dict[str, An
     # Успех! Раскодируем значения для дальнейшего использования.
     safe_data = {key: unquote(value) for key, value in data_dict.items()}
     return safe_data
+
+# Остальные функции (`auth_telegram`, `get_current_user`) остаются без изменений.
+# Я привожу их здесь для полноты, чтобы вы могли заменить весь файл.
 
 @bp.post("/api/auth/telegram")
 def auth_telegram():
