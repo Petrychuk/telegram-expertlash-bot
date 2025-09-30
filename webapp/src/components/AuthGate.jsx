@@ -8,7 +8,6 @@ export default function AuthGate({ children }) {
   const { user, setUser } = useAuth();
   const [status, setStatus] = useState("loading");
   const [errorDetails, setErrorDetails] = useState("");
-
   const router = useRouter();
   const pathname = usePathname();
 
@@ -19,7 +18,6 @@ export default function AuthGate({ children }) {
     }
 
     const initData = window.Telegram?.WebApp?.initData;
-
     if (!initData) {
       setErrorDetails("Не удалось получить данные Telegram. Откройте приложение через Telegram.");
       setStatus('error');
@@ -29,17 +27,13 @@ export default function AuthGate({ children }) {
     const authenticateAndFetchUser = async () => {
       try {
         const authApiUrl = `${process.env.NEXT_PUBLIC_API_BASE}/api/auth/telegram`;
-        
-        // --- ГЛАВНОЕ ИЗМЕНЕНИЕ №1: Добавляем credentials: 'include' ---
-        const commonFetchOptions = {
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'include', // <--- ЭТО ЗАСТАВИТ БРАУЗЕР ОТПРАВЛЯТЬ COOKIE
-        };
-
+       
+        // Шаг 1: Авторизация
         const authRes = await fetch(authApiUrl, {
-          ...commonFetchOptions,
           method: 'POST',
-          body: JSON.stringify({ init_data: initData }), 
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ init_data: initData }),
         });
 
         if (authRes.status === 403) {
@@ -48,19 +42,43 @@ export default function AuthGate({ children }) {
         }
 
         if (!authRes.ok) {
-          const errorData = await authRes.json().catch(() => ({ error: `Auth failed: ${authRes.status}` }));
+          const errorData = await authRes.json().catch(() => ({ 
+            error: `Auth failed: ${authRes.status}` 
+          }));
           throw new Error(errorData.error || 'unknown_auth_error');
         }
 
-        // --- ГЛАВНОЕ ИЗМЕНЕНИЕ №2: Используем credentials: 'include' и для /me ---
+        // ИЗМЕНЕНИЕ: Получаем токен из ответа
+        const authData = await authRes.json();
+        const token = authData.token;
+
+        if (token) {
+          // Сохраняем токен в localStorage
+          localStorage.setItem('auth_token', token);
+        }
+
+        // Шаг 2: Получаем данные пользователя
         const meApiUrl = `${process.env.NEXT_PUBLIC_API_BASE}/api/auth/me`;
-        const meRes = await fetch(meApiUrl, { 
-            method: 'GET', // Указываем метод явно
-            ...commonFetchOptions 
+        
+        // ИЗМЕНЕНИЕ: Используем токен из ответа или localStorage
+        const headers = {
+          'Content-Type': 'application/json',
+        };
+        
+        if (token) {
+          headers['Authorization'] = `Bearer ${token}`;
+        }
+
+        const meRes = await fetch(meApiUrl, {
+          method: 'GET',
+          headers: headers,
+          credentials: 'include', // Оставляем на случай если cookie работают
         });
 
         if (!meRes.ok) {
-          const errorData = await meRes.json().catch(() => ({ error: `Profile fetch failed: ${meRes.status}` }));
+          const errorData = await meRes.json().catch(() => ({ 
+            error: `Profile fetch failed: ${meRes.status}` 
+          }));
           throw new Error(errorData.error || 'unknown_profile_error');
         }
 
@@ -69,18 +87,21 @@ export default function AuthGate({ children }) {
         setStatus('success');
 
       } catch (e) {
+        console.error('Auth error:', e);
         setErrorDetails(e.message);
         setStatus('error');
       }
     };
 
     authenticateAndFetchUser();
-
   }, [pathname, router, setUser, user]);
 
-  // Рендер без изменений
   if (status === 'loading') {
-    return <div className="flex items-center justify-center h-screen">Аутентификация...</div>;
+    return (
+      <div className="flex items-center justify-center h-screen">
+        Аутентификация...
+      </div>
+    );
   }
 
   if (status === 'error') {
@@ -88,7 +109,9 @@ export default function AuthGate({ children }) {
       <div className="flex items-center justify-center h-screen text-center p-4">
         <div>
           <p className="font-bold text-red-600">Ошибка аутентификации</p>
-          <p className="text-sm text-gray-600 mt-2">Пожалуйста, полностью закройте и перезапустите приложение.</p>
+          <p className="text-sm text-gray-600 mt-2">
+            Пожалуйста, полностью закройте и перезапустите приложение.
+          </p>
           <p className="text-xs text-gray-400 mt-4">Детали: {errorDetails}</p>
         </div>
       </div>
