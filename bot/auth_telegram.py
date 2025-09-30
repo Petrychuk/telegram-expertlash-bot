@@ -276,15 +276,37 @@ def auth_telegram():
         }
         token = jwt.encode(payload, jwt_secret, algorithm="HS256")
 
-        response = make_response(jsonify({"status": "success"}))
+        # Возвращаем токен в теле ответа (лучше для cross-origin)
+        response_data = {
+            "status": "success",
+            "token": token,
+            "user": {
+                "id": user.id,
+                "tg_id": user.telegram_id,
+                "role": user.role.value,
+                "username": user.username,
+                "first_name": user.first_name,
+                "last_name": user.last_name,
+                "hasSubscription": has_access,
+            }
+        }
+        
+        response = make_response(jsonify(response_data))
+        
+        # Дополнительно устанавливаем cookie (если сработает)
+        origin = request.headers.get('Origin', '')
+        is_production = 'netlify.app' in origin or 'expertlash' in origin
+        
         response.set_cookie(
             "auth_token",
             value=token,
             max_age=60 * 60 * 24 * 7,
             path="/",
             httponly=True,
-            samesite="Lax",
+            secure=is_production,
+            samesite="None" if is_production else "Lax",
         )
+        
         logger.info(f"✅ Успешная авторизация: user_id={user.id}")
         return response
         
@@ -300,7 +322,16 @@ def auth_telegram():
 @bp.get("/api/auth/me")
 def get_current_user():
     jwt_secret = current_app.config.get("JWT_SECRET")
+    
+    # Пробуем получить токен из cookie или Authorization header
     token = request.cookies.get("auth_token")
+    
+    if not token:
+        # Пробуем Bearer token из заголовка
+        auth_header = request.headers.get('Authorization', '')
+        if auth_header.startswith('Bearer '):
+            token = auth_header[7:]  # Убираем "Bearer "
+    
     if not token:
         return jsonify({"error": "no_token"}), 401
 
