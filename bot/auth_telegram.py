@@ -269,7 +269,7 @@ def auth_telegram():
         # Создаём JWT
         now = int(time.time())
         payload = {
-            "sub": user.id,
+            "sub": str(user.id),  # ИСПРАВЛЕНО: конвертируем в строку
             "iat": now,
             "exp": now + 60 * 60 * 24 * 7,
             "role": user.role.value,
@@ -337,7 +337,7 @@ def get_current_user():
 
     try:
         payload = jwt.decode(token, jwt_secret, algorithms=["HS256"])
-        user_id = int(payload["sub"])
+        user_id = int(payload["sub"])  # Конвертируем обратно в int
     except (jwt.ExpiredSignatureError, jwt.InvalidTokenError) as e:
         logger.warning(f"Invalid token: {e}")
         return jsonify({"error": "bad_token"}), 401
